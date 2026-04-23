@@ -20,9 +20,9 @@ duration = 1000        # Charging duration [s]
 ΔtEIS = 50             # Sampling interval of EIS
 ΔtUDC = 10             # Sampling interval of UDC
 Δt = 10                # Time step
-
+f_ = np.logspace(np.log10(400), np.log10(4), 17)  # EIS frequencies [Hz]
 targets_ = ('UDC', 'Zreal', 'Zimag')
-pnormfixed_ = {}
+pnormfixed_ = {}        # Normalized values of parameters that are fixed
 
 task = Identification(
     Qnom=Qnom,
@@ -31,7 +31,7 @@ task = Identification(
     TVT_=TVT_,
     onset=onset, duration=duration,
     Δt=Δt, ΔtUDC=ΔtUDC, ΔtEIS=ΔtEIS,
-    f_=np.logspace(np.log10(400), np.log10(4), 17),
+    f_=f_,
     T=T, N=N,
     n_jobs=n_jobs,
     verbose=True,
@@ -54,5 +54,3 @@ record = task.identify(
     targets_=targets_,
     Nsample=Nsample,
     )
-
-task.plot_Ut()
