@@ -3,8 +3,9 @@ import os
 
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy as np
-from numpy import array, searchsorted, clip
+from numpy import array, arange, ndarray, zeros, empty_like, \
+    searchsorted, clip, unique
+
 
 class Interpolate1D:
     """快速一维线性插值"""
@@ -14,15 +15,14 @@ class Interpolate1D:
         y_ = array(y_)
         assert x_.ndim==1, '自变量序列x_应为1维'
         assert y_.ndim==1, '因变量序列y_应为1维'
-        assert np.unique(x_).size == x_.size, '自变量序列x_不应包含相同值'
-        idx_ = np.argsort(x_)
+        assert unique(x_).size == x_.size, '自变量序列x_不应包含相同值'
+        idx_ = x_.argsort()
         self.x_ = x_[idx_]
         self.y_ = y_[idx_]
         del x_, y_, idx_
 
-    def __call__(self, x_):
+    def __call__(self, x_: ndarray) -> ndarray:
         """插值"""
-        x_ = array(x_)
         xbase_ = self.x_
         ybase_ = self.y_
         # 找区间
@@ -40,21 +40,21 @@ class Interpolate1D:
         y_ = yLow_ + (x_ - xLow_) * (yHigh_ - yLow_) / (xHigh_ - xLow_)
         return y_
 
-def triband_to_dense(band__: np.ndarray) -> np.ndarray:
+def triband_to_dense(band__: ndarray) -> ndarray:
     """三角阵的带band__ (3, N)  -> 稠密方阵K__ (N, N)"""
     N = band__.shape[1]
-    K__ = np.zeros((N, N), dtype=band__.dtype)
-    idx_ = np.arange(N)
+    K__ = zeros((N, N), dtype=band__.dtype)
+    idx_ = arange(N)
     K__[idx_, idx_] = band__[1]                # 主对角线
     K__[idx_[:-1], idx_[1:]] = band__[0, 1:]   # 上对角线
     K__[idx_[1:], idx_[:-1]] = band__[2, :-1]  # 下对角线
     return K__
 
 def Thomas_solve(
-        band__: np.ndarray,  # (3, N) 三对角矩阵的带
-        RHS__: np.ndarray,   # (N, M) 右端项
+        band__: ndarray,  # (3, N) 三对角矩阵的带
+        RHS__: ndarray,   # (N, M) 右端项
         overwrite=False,     # 是否覆盖band__、RHS__
-        ) -> np.ndarray:
+        ) -> ndarray:
     """Thomas算法三对角方程组"""
     # 统一成2维
     squeeze = False
@@ -77,7 +77,7 @@ def Thomas_solve(
         d_[i] -= w*du_[i - 1]
         RHS__[i] -= w*RHS__[i-1]
     # 回代
-    X__ = np.empty_like(RHS__)
+    X__ = empty_like(RHS__)
     X__[-1] = RHS__[-1]/d_[-1]
     for i in range(N-2, -1, -1):
         X__[i] = (RHS__[i] - du_[i]*X__[i+1])/d_[i]

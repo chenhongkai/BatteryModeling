@@ -14,8 +14,9 @@ import Optimization
 from P2Dmodel import LPJTFP2D, LumpedParameters, set_matplotlib
 set_matplotlib()
 
-with np.load(pathlib.Path(__file__).parent.joinpath('example_UnegUpos.npz'), allow_pickle=True) as npz:
-    Uneg, Upos = npz['Uneg'].item(), npz['Upos'].item()
+with np.load(pathlib.Path(__file__).parent.joinpath('example_UOCPneg_and_UOCPpos.npz'), allow_pickle=True) as npz:
+    UOCPneg, UOCPpos = npz['UOCPneg'].item(), npz['UOCPpos'].item()
+
 
 class Identification(LumpedParameters):
     def __init__(self,
@@ -30,11 +31,11 @@ class Identification(LumpedParameters):
             ΔtEIS: int = 50,        # EIS测量时间间隔 [s]
             Umax: float = 4.2,      # 最大运行电压 [V]
             Umin: float = 2.8,      # 最小运行电压 [V]
-            Uneg: Callable = Uneg,  # 负极开路电位函数 [V]
-            Upos: Callable = Upos,  # 正极开路电位函数 [V]
+            UOCPneg: Callable = UOCPneg,  # 负极开路电位函数 [V]
+            UOCPpos: Callable = UOCPpos,  # 正极开路电位函数 [V]
             f_: Sequence[float] = np.logspace(np.log10(400), np.log10(4), 17),  # 频率序列 [Hz]
             T: int = 1000,     # 迭代次数
-            N: int = 200,      # 种群规模
+            N: int = 100,      # 种群规模
             n_jobs: int = -1,  # joblib并行执行核数
             algorithm: str = 'STA',  # 优化算法
             objective: str = 'RMSE', # 最小化目标
@@ -71,10 +72,10 @@ class Identification(LumpedParameters):
             'doubleLayerEffect': True, 'lithiumPlating': False,
             'complete': False, 'verbose': False, 'constants':True,
             'f_': self.f_,
-            'Uneg': Uneg, 'Upos': Upos,
+            'UOCPneg': UOCPneg, 'UOCPpos': UOCPpos,
             'Umax': Umax, 'Umin': Umin,
-            'dUdθneg': LPJTFP2D.generate_solve_dUdθ_(Uneg),
-            'dUdθpos': LPJTFP2D.generate_solve_dUdθ_(Upos),}
+            'dUOCPdθsneg': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPneg),
+            'dUOCPdθspos': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPpos),}
         self.banded_experience = {key: None for key in
             ['bandwidthsJ_',
              'bandwidthsKf_',
@@ -148,7 +149,7 @@ class Identification(LumpedParameters):
         if len(targets_)>1:
             X__ = qmc.LatinHypercube(d=D).random(n=Nsample)  # (Nsample, D)
             if verbose:
-                print(f'{D}维空间采样{len(X__)}点，估计权重。', end='')
+                print(f'{D}维空间采样{len(X__)}点，估计权重。Estimating weights...', end='')
             Y__ = np.array(joblib.Parallel(n_jobs=self.n_jobs, backend="loky")(joblib.delayed(function_costs_)(x_) for x_ in X__))
             if verbose:
                 print(f'采样耗时{time.time() - timeStart:.1f}s，', end='')
@@ -232,12 +233,16 @@ class Identification(LumpedParameters):
             costsTest__       = np.array(costsTest__,       dtype=dtype)  # (N, 3)
             print('完成验证、测试...')
 
-        self.record = {prop: getattr(self, prop) for prop in
-                       ['Qnom', 'IC', 'tC', 'TVT_', 'onset', 'duration', 'Δt', 'ΔtUDC', 'ΔtEIS',
-                        'f_', 'T', 'N',
-                        'algorithm', 'objective',
-                        'kwargs', 'I', 'pVC_',]}
-        self.record |= {
+        self.record = record = {
+            prop: getattr(self, prop) for prop in
+            ['Qnom', 'IC', 'tC', 'TVT_', 'onset', 'duration', 'Δt', 'ΔtUDC', 'ΔtEIS',
+            'f_', 'T', 'N',
+            'algorithm', 'objective',
+            'I', 'pVC_',]}
+        record['kwargs'] = self.kwargs.copy()
+        del record['kwargs']['dUOCPdθsneg']
+        del record['kwargs']['dUOCPdθspos']
+        record |= {
             'tUDCmea_': self.tUDCmea_,
             'UDCmea_': self.UDCmea_,
             'tZmea_': self.tZmea_,
@@ -257,8 +262,10 @@ class Identification(LumpedParameters):
             'yGlobalOptimal_' : optimizer.yGlobalOptimal_,
             'yMean_': optimizer.yMean_,
             'Nfunctions': optimizer.Nfunctions,
+            'timeconsumed': (time.time() - timeStart)/3600,
             }
-        return self.record
+        print(f'辨识耗时{record['timeconsumed']:.2f}h')
+        return record
 
     def create_banded_experience(self) -> None:
         """创造带状化经验"""
@@ -548,4 +555,3 @@ if __name__ == '__main__':
     task = Identification()
     task.create_banded_experience()
 
-    # cell.CC(1, 20)

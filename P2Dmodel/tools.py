@@ -1,5 +1,6 @@
-import math
-import numpy as np
+#%%
+from math import log10
+from numpy import array
 
 from P2Dmodel import DFNP2D
 
@@ -15,28 +16,28 @@ class LumpedParameters:
         Qnom_in_C = Qnom*3600  # 电池标称容量 [C]
         self.bounds__ = {
             'SOC0': (0.01, 0.8),
-            'Qcell': np.array([0.75, 1.1])*Qnom,
-            'Qneg': np.array([1.01, 1.6])*Qnom,
-            'Qpos': np.array([1.01, 1.6])*Qnom,
-            'qeneg': np.array([1e-2, 1])*Qnom_in_C,
-            'qesep': np.array([1e-3, 1])*Qnom_in_C,
-            'qepos': np.array([1e-2, 1])*Qnom_in_C,
-            'κneg': np.array([0.00075, 0.08])*Qnom_in_C,
-            'κsep': np.array([0.004, 0.08])*Qnom_in_C,
-            'κpos': np.array([0.00075, 0.08])*Qnom_in_C,
-            'σneg': np.array([0.01, 170])*Qnom_in_C,
-            'σpos': np.array([0.01, 170])*Qnom_in_C,
+            'Qcell': array([0.75, 1.1])*Qnom,
+            'Qneg': array([1.01, 1.6])*Qnom,
+            'Qpos': array([1.01, 1.6])*Qnom,
+            'qeneg': array([1e-2, 1])*Qnom_in_C,
+            'qesep': array([1e-3, 1])*Qnom_in_C,
+            'qepos': array([1e-2, 1])*Qnom_in_C,
+            'κneg': array([0.00075, 0.08])*Qnom_in_C,
+            'κsep': array([0.004, 0.08])*Qnom_in_C,
+            'κpos': array([0.00075, 0.08])*Qnom_in_C,
+            'σneg': array([0.01, 170])*Qnom_in_C,
+            'σpos': array([0.01, 170])*Qnom_in_C,
             'Dsneg': (5e-6, 0.63),
             'Dspos': (5e-6, 0.63),
             'De': (2.56e-3, 2.22e-1),
-            'κD': np.array([0.5, 9.])*2*R/F,
-            'kneg': np.array([1e-6, 5e-2])*Qnom_in_C,
-            'kpos': np.array([1e-6, 5e-2])*Qnom_in_C,
-            'RSEIneg': np.array([0.09, 330])/Qnom_in_C,
-            'RSEIpos': np.array([0.09, 330])/Qnom_in_C,
-            'CDLneg': np.array([1e-6, 1e-2])*Qnom_in_C,
-            'CDLpos': np.array([1e-6, 1e-2])*Qnom_in_C,
-            'l': np.array([1e-13, 1e-11])*Qnom_in_C, }
+            'κD': array([0.5, 9.])*2*R/F,
+            'kneg': array([1e-6, 5e-2])*Qnom_in_C,
+            'kpos': array([1e-6, 5e-2])*Qnom_in_C,
+            'RSEIneg': array([0.09, 330])/Qnom_in_C,
+            'RSEIpos': array([0.09, 330])/Qnom_in_C,
+            'CDLneg': array([1e-6, 1e-2])*Qnom_in_C,
+            'CDLpos': array([1e-6, 1e-2])*Qnom_in_C,
+            'l': array([1e-13, 1e-11])*Qnom_in_C, }
 
         for name, bound_ in self.bounds__.items():
             self.bounds__[name] = (float(bound_[0]), float(bound_[1]))
@@ -52,7 +53,7 @@ class LumpedParameters:
     @property
     def names_(self):
         # 参数名序列
-        return np.array(list(self.bounds__.keys()))
+        return array(list(self.bounds__.keys()))
 
     @property
     def nominalSet_(self) -> dict:
@@ -68,7 +69,7 @@ class LumpedParameters:
         lb, ub = self.bounds__[name]
         # assert lb<=value<=ub, f'参数{name}的取值范围为[{lb}, {ub}]，当前输入取值{value}'
         if abs(ub/lb)>10:
-            normvalue = (math.log10(value) - math.log10(lb))/(math.log10(ub) - math.log10(lb))
+            normvalue = (log10(value) - log10(lb))/(log10(ub) - log10(lb))
         else:
             normvalue = (value - lb)/(ub - lb)
         return normvalue
@@ -81,7 +82,7 @@ class LumpedParameters:
         # normvalue = float(normvalue)
         lb, ub = self.bounds__[name]
         if abs(ub/lb)>10:
-            value = 10**(math.log10(lb) + normvalue*(math.log10(ub) - math.log10(lb)))
+            value = 10**(log10(lb) + normvalue*(log10(ub) - log10(lb)))
         else:
             value = lb + normvalue*(ub - lb)
         return value
@@ -256,3 +257,7 @@ def transform37to23(
         'CDLpos' : apos*A*Lpos*CDLpos,  # 正极集总双电层电容 [F]
         'l' : l,
         'SOC0': SOC0, }
+
+if __name__ == '__main__':
+
+    pass

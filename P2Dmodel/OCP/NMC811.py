@@ -5,6 +5,7 @@ from P2Dmodel.OCP import OpenCircuitPotential
 
 
 class NMC811(OpenCircuitPotential):
+
     def __init__(self):
 
         # COMSOL NMC811
