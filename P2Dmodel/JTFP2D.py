@@ -10,7 +10,7 @@ from numpy import pi, nan, ndarray,\
     array, arange, zeros, full, stack, hstack, concatenate, \
     empty, meshgrid, \
     sinh, cosh, outer, ptp, log10,\
-    ix_
+    ix_, isscalar
 from numpy.linalg import solve
 
 from P2Dmodel import DFNP2D
@@ -34,29 +34,33 @@ class JTFP2D(DFNP2D):
         self.EISdatanames_,              # 需记录的阻抗数据名称
         ) = (None,)*3
         # 状态量
-        if fullyInitialize:
-            (self.REcsnegsurf__, self.IMcsnegsurf__,  # 负极固相表面浓度实部、虚部
-            self.REcspossurf__, self.IMcspossurf__,   # 正极固相表面浓度实部、虚部
-            self.REce__, self.IMce__,                 # 电解液锂离子浓度实部、虚部
-            self.REjintneg__, self.IMjintneg__,       # 负极主反应局部体积电流密度实部、虚部
-            self.REjintpos__, self.IMjintpos__,       # 正极主反应局部体积电流密度实部、虚部
-            self.REjDLneg__, self.IMjDLneg__,         # 负极双电层局部体积电流密度实部、虚部
-            self.REjDLpos__, self.IMjDLpos__,         # 正极双电层局部体积电流密度实部、虚部
-            self.REi0intneg__, self.IMi0intneg__,     # 负极交换电流密度实部、虚部
-            self.REi0intpos__, self.IMi0intpos__,     # 正极交换电流密度实部、虚部
-            self.REjLP__, self.IMjLP__,               # 析锂反应局部体积电流密度实部、虚部
-            ) = (None,)*20
-        (self.tEIS,                          # 计算阻抗的时刻 [s]
-        self.REφsneg__, self.IMφsneg__,      # 负极固相电势实部、虚部
-        self.REφspos__, self.IMφspos__,      # 正极固相电势实部、虚部
-        self.REφe__, self.IMφe__,            # 电解液电势实部、虚部
-        self.REηintneg__, self.IMηintneg__,  # 负极主反应过电位实部、虚部
-        self.REηintpos__, self.IMηintpos__,  # 正极主反应过电位实部、虚部
-        self.REηLP__, self.IMηLP__,          # 析锂反应过电位实部、虚部
-        self.Kf__,  # 频域因变量线性矩阵
-        self.bKf_,  # Kf__ @ X_ = bKf_
+        Nf, Nneg, Npos = len(f_), self.Nneg, self.Npos
+        self.REφsneg__, self.IMφsneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极固相电势实部、虚部
+        self.REφspos__, self.IMφspos__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极固相电势实部、虚部
+        if self.complete:
+            Ne = self.Ne
+            self.REφe__, self.IMφe__ = empty((Nf, Ne)), empty((Nf, Ne))  # 电解液电势实部、虚部
+            self.REηintneg__, self.IMηintneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极主反应过电位实部、虚部
+            self.REηintpos__, self.IMηintpos__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极主反应过电位实部、虚部
+            if lithiumPlating:=self.lithiumPlating:
+                self.REηLP__, self.IMηLP__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 析锂反应过电位实部、虚部
+            if fullyInitialize:
+                self.REcsnegsurf__, self.IMcsnegsurf__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极固相表面浓度实部、虚部
+                self.REcspossurf__, self.IMcspossurf__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极固相表面浓度实部、虚部
+                self.REce__, self.IMce__ = empty((Nf, Ne)), empty((Nf, Ne))                    # 电解液锂离子浓度实部、虚部
+                self.REjintneg__, self.IMjintneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))      # 负极主反应局部体积电流密度实部、虚部
+                self.REjintpos__, self.IMjintpos__ = empty((Nf, Npos)), empty((Nf, Npos))      # 正极主反应局部体积电流密度实部、虚部
+                self.REjDLneg__, self.IMjDLneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))        # 负极双电层局部体积电流密度实部、虚部
+                self.REjDLpos__, self.IMjDLpos__ = empty((Nf, Npos)), empty((Nf, Npos))        # 正极双电层局部体积电流密度实部、虚部
+                self.REi0intneg__, self.IMi0intneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))    # 负极交换电流密度实部、虚部
+                self.REi0intpos__, self.IMi0intpos__ = empty((Nf, Npos)), empty((Nf, Npos))    # 正极交换电流密度实部、虚部
+                if lithiumPlating:
+                    self.REjLP__, self.IMjLP__ = empty((Nf, Nneg)), empty((Nf, Nneg))   # 负极析锂反应局部体积电流密度实部、虚部
+        (self.tEIS,          # 计算阻抗的时刻 [s]
+        self.Kf__,           # 频域因变量线性矩阵
+        self.bKf_,           # Kf__ @ X_ = bKf_
         self.bandwidthsKf_,  # Kf__矩阵上下带宽
-        ) = (None,)*16
+        ) = (None,)*4
         # 索引频域因变量
         (self.idxREcsnegsurf_, self.idxIMcsnegsurf_,
         self.idxREcspossurf_, self.idxIMcspossurf_,
@@ -104,14 +108,14 @@ class JTFP2D(DFNP2D):
                 'REφsneg__', 'IMφsneg__',      # 负极固相电势实部、虚部 [V]
                 'REφspos__', 'IMφspos__',      # 正极固相电势实部、虚部 [V]
                 'REφe__', 'IMφe__',            # 电解液电势实部、虚部 [V]
-                'REjintneg__', 'IMjintneg__',  # 负极局部体积电流密度实部、虚部 [A/m^3]
-                'REjintpos__', 'IMjintpos__',  # 正极局部体积电流密度实部、虚部 [A/m^3]
+                'REjintneg__', 'IMjintneg__',  # 负极主反应局部体积电流密度实部、虚部 [A/m^3]
+                'REjintpos__', 'IMjintpos__',  # 正极主反应局部体积电流密度实部、虚部 [A/m^3]
                 'REjDLneg__', 'IMjDLneg__',    # 负极双电层效应局部体积电流密度实部、虚部 [A/m^3]
                 'REjDLpos__', 'IMjDLpos__',    # 正极双电层效应局部体积电流密度实部、虚部 [A/m^3]
-                'REηintneg__', 'IMηintneg__',  # 负极过电位实部、虚部 [V]
-                'REηintpos__', 'IMηintpos__',  # 正极过电位实部、虚部 [V]
-                'REi0intneg__', 'IMi0intneg__',    # 负极交换电流密度实部、虚部 [A/m^2]
-                'REi0intpos__', 'IMi0intpos__',])  # 正极交换电流密度实部、虚部 [A/m^2]
+                'REi0intneg__', 'IMi0intneg__',  # 负极主反应交换电流密度实部、虚部 [A/m^2]
+                'REi0intpos__', 'IMi0intpos__',  # 正极主反应交换电流密度实部、虚部 [A/m^2]
+                'REηintneg__', 'IMηintneg__',    # 负极主反应过电位实部、虚部 [V]
+                'REηintpos__', 'IMηintpos__',])  # 正极主反应过电位实部、虚部 [V]
         self.data.update({EISdataname: [] for EISdataname in EISdatanames_})  # 字典：存储呈时间序列的阻抗数据
         if self.verbose and type(self) is JTFP2D:
             print(self)
@@ -122,17 +126,17 @@ class JTFP2D(DFNP2D):
         """求解频率相关变量"""
         ω_ = self.ω_
         solve_Kcssurf__ = JTFP2D.solve_Kcssurf__
-        aeffneg, aeffpos, Rsneg, Rspos, CDLneg, CDLpos, Dsneg, Dspos = (
-            self.aeffneg, self.aeffpos, self.Rsneg, self.Rspos, self.CDLneg, self.CDLpos, self.Dsneg, self.Dspos)
+        Rsneg, Rspos, CDLneg, CDLpos, Dsneg, Dspos = (
+            self.Rsneg, self.Rspos, self.CDLneg, self.CDLpos, self.Dsneg, self.Dspos)
         aneg, apos = self.aneg, self.apos
         frequency_dependent_variables = {
             'ωεeΔx__': outer(ω_, self.εe_*self.Δx_),  # (Nf, Ne) 各频率各控制体的ω*εe*Δx值
-            'ωaCDLneg_': ω_ * (aeffneg*CDLneg),
-            'ωaCDLpos_': ω_ * (aeffpos*CDLpos),
-            'ωCDLRSEIneg_': ω_ * (CDLneg*self.RSEIneg),
-            'ωCDLRSEIpos_': ω_ * (CDLpos*self.RSEIpos),
-            'minusKcsnegsurf___': -array([solve_Kcssurf__(ω, Rsneg, Dsneg, aneg) for ω in ω_]),   # 负极各频率Kcssurf__矩阵
-            'minusKcspossurf___': -array([solve_Kcssurf__(ω, Rspos, Dspos, apos) for ω in ω_]),}  # 正极各频率Kcssurf__矩阵
+            'ωaCDLneg_': ω_ * (self.aeffneg*CDLneg),  # (Nf,)
+            'ωaCDLpos_': ω_ * (self.aeffpos*CDLpos),  # (Nf,)
+            'ωCDLRSEIneg_': ω_ * (CDLneg*self.RSEIneg),  # (Nf,)
+            'ωCDLRSEIpos_': ω_ * (CDLpos*self.RSEIpos),  # (Nf,)
+            'minusKcsnegsurf___': -array([solve_Kcssurf__(ω, Rsneg, Dsneg, aneg) for ω in ω_]),   # (Nf, 2, 2) 负极各频率Kcssurf__矩阵
+            'minusKcspossurf___': -array([solve_Kcssurf__(ω, Rspos, Dspos, apos) for ω in ω_]),}  # (Nf, 2, 2) 正极各频率Kcssurf__矩阵
         return frequency_dependent_variables
 
     def generate_indices_of_frequency_domain_dependent_variables(self) -> int:
@@ -638,40 +642,40 @@ class JTFP2D(DFNP2D):
                 X__[nf] = solve(Kf__, bKf_)
 
         self.tEIS = tEIS
-        self.REφsneg__ = X__[:, idxREφsneg_]  # 负极固相电势实部
-        self.IMφsneg__ = X__[:, idxIMφsneg_]  # 负极固相电势虚部
-        self.REφspos__ = X__[:, idxREφspos_]  # 正极固相电势实部
-        self.IMφspos__ = X__[:, idxIMφspos_]  # 正极固相电势虚部
+        self.REφsneg__[:] = X__[:, idxREφsneg_]  # 负极固相电势实部
+        self.IMφsneg__[:] = X__[:, idxIMφsneg_]  # 负极固相电势虚部
+        self.REφspos__[:] = X__[:, idxREφspos_]  # 正极固相电势实部
+        self.IMφspos__[:] = X__[:, idxIMφspos_]  # 正极固相电势虚部
         if self.complete:
-            self.REcsnegsurf__ = X__[:, idxREcsnegsurf_]  # 负极固相表面浓度实部
-            self.IMcsnegsurf__ = X__[:, idxIMcsnegsurf_]  # 负极固相表面浓度虚部
-            self.REcspossurf__ = X__[:, idxREcspossurf_]  # 正极固相表面浓度实部
-            self.IMcspossurf__ = X__[:, idxIMcspossurf_]  # 正极固相表面浓度虚部
-            self.REce__ = X__[:, idxREce_]        # 电解液锂离子浓度实部
-            self.IMce__ = X__[:, idxIMce_]        # 电解液锂离子浓度虚部
-            self.REφe__ = X__[:, idxREφe_]        # 电解液电势实部
-            self.IMφe__ = X__[:, idxIMφe_]        # 电解液电势虚部
-            self.REjintneg__ = X__[:, idxREjintneg_]  # 负极主反应局部体积电流密度实部
-            self.IMjintneg__ = X__[:, idxIMjintneg_]  # 负极主反应局部体积电流密度虚部
-            self.REjintpos__ = X__[:, idxREjintpos_]  # 正极主反应局部体积电流密度实部
-            self.IMjintpos__ = X__[:, idxIMjintpos_]  # 正极主反应局部体积电流密度虚部
-            self.REjDLneg__ = X__[:, idxREjDLneg_]  # 负极双电层局部体积电流密度实部
-            self.IMjDLneg__ = X__[:, idxIMjDLneg_]  # 负极双电层局部体积电流密度虚部
-            self.REjDLpos__ = X__[:, idxREjDLpos_]  # 正极双电层局部体积电流密度实部
-            self.IMjDLpos__ = X__[:, idxIMjDLpos_]  # 正极双电层局部体积电流密度虚部
-            self.REi0intneg__ = X__[:, idxREi0intneg_] if REIMi0intnegUnknown else zeros((Nf, Nneg)) # 负极交换电流密度实部
-            self.IMi0intneg__ = X__[:, idxIMi0intneg_] if REIMi0intnegUnknown else zeros((Nf, Nneg)) # 负极交换电流密度虚部
-            self.REi0intpos__ = X__[:, idxREi0intpos_] if REIMi0intposUnknown else zeros((Nf, Npos)) # 正极交换电流密度实部
-            self.IMi0intpos__ = X__[:, idxIMi0intpos_] if REIMi0intposUnknown else zeros((Nf, Npos)) # 正极交换电流密度虚部
-            self.REηintneg__ = X__[:, idxREηintneg_]  # 负极过电位实部
-            self.IMηintneg__ = X__[:, idxIMηintneg_]  # 负极过电位虚部
-            self.REηintpos__ = X__[:, idxREηintpos_]  # 正极过电位实部
-            self.IMηintpos__ = X__[:, idxIMηintpos_]  # 正极过电位虚部
+            self.REcsnegsurf__[:] = X__[:, idxREcsnegsurf_]  # 负极固相表面浓度实部
+            self.IMcsnegsurf__[:] = X__[:, idxIMcsnegsurf_]  # 负极固相表面浓度虚部
+            self.REcspossurf__[:] = X__[:, idxREcspossurf_]  # 正极固相表面浓度实部
+            self.IMcspossurf__[:] = X__[:, idxIMcspossurf_]  # 正极固相表面浓度虚部
+            self.REce__[:] = X__[:, idxREce_]        # 电解液锂离子浓度实部
+            self.IMce__[:] = X__[:, idxIMce_]        # 电解液锂离子浓度虚部
+            self.REφe__[:] = X__[:, idxREφe_]        # 电解液电势实部
+            self.IMφe__[:] = X__[:, idxIMφe_]        # 电解液电势虚部
+            self.REjintneg__[:] = X__[:, idxREjintneg_]  # 负极主反应局部体积电流密度实部
+            self.IMjintneg__[:] = X__[:, idxIMjintneg_]  # 负极主反应局部体积电流密度虚部
+            self.REjintpos__[:] = X__[:, idxREjintpos_]  # 正极主反应局部体积电流密度实部
+            self.IMjintpos__[:] = X__[:, idxIMjintpos_]  # 正极主反应局部体积电流密度虚部
+            self.REjDLneg__[:] = X__[:, idxREjDLneg_]  # 负极双电层局部体积电流密度实部
+            self.IMjDLneg__[:] = X__[:, idxIMjDLneg_]  # 负极双电层局部体积电流密度虚部
+            self.REjDLpos__[:] = X__[:, idxREjDLpos_]  # 正极双电层局部体积电流密度实部
+            self.IMjDLpos__[:] = X__[:, idxIMjDLpos_]  # 正极双电层局部体积电流密度虚部
+            self.REi0intneg__[:] = X__[:, idxREi0intneg_] if REIMi0intnegUnknown else zeros((Nf, Nneg)) # 负极交换电流密度实部
+            self.IMi0intneg__[:] = X__[:, idxIMi0intneg_] if REIMi0intnegUnknown else zeros((Nf, Nneg)) # 负极交换电流密度虚部
+            self.REi0intpos__[:] = X__[:, idxREi0intpos_] if REIMi0intposUnknown else zeros((Nf, Npos)) # 正极交换电流密度实部
+            self.IMi0intpos__[:] = X__[:, idxIMi0intpos_] if REIMi0intposUnknown else zeros((Nf, Npos)) # 正极交换电流密度虚部
+            self.REηintneg__[:] = X__[:, idxREηintneg_]  # 负极过电位实部
+            self.IMηintneg__[:] = X__[:, idxIMηintneg_]  # 负极过电位虚部
+            self.REηintpos__[:] = X__[:, idxREηintpos_]  # 正极过电位实部
+            self.IMηintpos__[:] = X__[:, idxIMηintpos_]  # 正极过电位虚部
             if lithiumPlating:
-                self.REjLP__ = X__[:, idxREjLP_]  # 负极析锂局部体积电流密度实部
-                self.IMjLP__ = X__[:, idxIMjLP_]  # 负极析锂局部体积电流密度虚部
-                self.REηLP__ = X__[:, idxREηLP_]  # 负极析锂过电位实部
-                self.IMηLP__ = X__[:, idxIMηLP_]  # 负极析锂过电位虚部
+                self.REjLP__[:] = X__[:, idxREjLP_]  # 负极析锂局部体积电流密度实部
+                self.IMjLP__[:] = X__[:, idxIMjLP_]  # 负极析锂局部体积电流密度虚部
+                self.REηLP__[:] = X__[:, idxREηLP_]  # 负极析锂过电位实部
+                self.IMηLP__[:] = X__[:, idxIMηLP_]  # 负极析锂过电位虚部
         if self.verbose:
             print(f'计算时刻t = {tEIS:.1f}s 电化学阻抗谱')
         self.record_EISdata()  # 记录阻抗数据
@@ -680,7 +684,12 @@ class JTFP2D(DFNP2D):
     def record_EISdata(self):
         """记录阻抗数据"""
         for dataname in self.EISdatanames_:
-            self.data[dataname].append(getattr(self, dataname))
+            value = getattr(self, dataname)
+            if isscalar(value):
+                pass
+            else:
+                value = value.copy()
+            self.data[dataname].append(value)
 
     @property
     def Z_(self):
@@ -1228,7 +1237,7 @@ class JTFP2D(DFNP2D):
 
         for n, (REjintneg_, REjintpos_, label) in enumerate(zip(REjintneg__, REjintpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*REjintneg_, *([nan]*self.Nsep), *REjintpos_]
+            y_ = *REjintneg_, *([nan]*self.Nsep), *REjintpos_
             ax1.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax1.set_ylabel(rf'{self.jSign}′$_{{int,AC}}$({self.xSign}; ${{\it f}}$, ${{\it t}}$) [{self.jUnit}]')
         self.plot_interfaces(ax1)
@@ -1236,7 +1245,7 @@ class JTFP2D(DFNP2D):
 
         for n, (IMjintneg_, IMjintpos_, label) in enumerate(zip(IMjintneg__, IMjintpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*IMjintneg_, *([nan]*self.Nsep), *IMjintpos_]
+            y_ = *IMjintneg_, *([nan]*self.Nsep), *IMjintpos_
             ax2.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax2.set_ylabel(ax1.get_ylabel().replace('′', '″'))
         self.plot_interfaces(ax2)
@@ -1263,10 +1272,9 @@ class JTFP2D(DFNP2D):
         ax1.set_position([.1, .59, .75, 0.375])
         ax2.set_position([.1, .08, .75, 0.375])
 
-
         for n, (REjDLneg_, REjDLpos_, label) in enumerate(zip(REjDLneg__, REjDLpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*REjDLneg_, *([nan]*self.Nsep), *REjDLpos_]
+            y_ = *REjDLneg_, *([nan]*self.Nsep), *REjDLpos_
             ax1.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax1.set_ylabel(rf'{self.jSign}′$_{{DL,AC}}$({self.xSign}; ${{\it f}}$, ${{\it t}}$) [{self.jUnit}]')
         self.plot_interfaces(ax1)
@@ -1274,7 +1282,7 @@ class JTFP2D(DFNP2D):
 
         for n, (IMjDLneg_, IMjDLpos_, label) in enumerate(zip(IMjDLneg__, IMjDLpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*IMjDLneg_, *([nan]*self.Nsep), *IMjDLpos_]
+            y_ = *IMjDLneg_, *([nan]*self.Nsep), *IMjDLpos_
             ax2.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax2.set_ylabel(ax1.get_ylabel().replace('′', '″'))
         self.plot_interfaces(ax2)
@@ -1303,7 +1311,7 @@ class JTFP2D(DFNP2D):
 
         for n, (REi0intneg_, REi0intpos_, label) in enumerate(zip(REi0intneg__, REi0intpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*REi0intneg_, *([nan]*self.Nsep), *REi0intpos_]
+            y_ = *REi0intneg_, *([nan]*self.Nsep), *REi0intpos_
             ax1.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax1.set_ylabel(rf'{self.i0Sign.replace('}', '′}').replace('0', '{0,AC}')}({self.xSign}; ${{\it f}}$, ${{\it t}}$) [{self.i0Unit}]')
         self.plot_interfaces(ax1)
@@ -1311,7 +1319,7 @@ class JTFP2D(DFNP2D):
 
         for n, (IMi0intneg_, IMi0intpos_, label) in enumerate(zip(IMi0intneg__, IMi0intpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*IMi0intneg_, *([nan]*self.Nsep), *IMi0intpos_]
+            y_ = *IMi0intneg_, *([nan]*self.Nsep), *IMi0intpos_
             ax2.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax2.set_ylabel(ax1.get_ylabel().replace('′', '″'))
         self.plot_interfaces(ax2)
@@ -1339,7 +1347,7 @@ class JTFP2D(DFNP2D):
 
         for n, (REηintneg_, REηintpos_, label) in enumerate(zip(REηintneg__, REηintpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*REηintneg_, *([nan]*self.Nsep), *REηintpos_]
+            y_ = *REηintneg_, *([nan]*self.Nsep), *REηintpos_
             ax1.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax1.set_ylabel(rf'${{\it η′}}_{{int,AC}}$({self.xSign}; ${{\it f}}$, ${{\it t}}$) [mV]')
         self.plot_interfaces(ax1)
@@ -1347,7 +1355,7 @@ class JTFP2D(DFNP2D):
 
         for n, (IMηintneg_, IMηintpos_, t) in enumerate(zip(IMηintneg__, IMηintpos__, labels_)):
             x_ = self.xPlot_
-            y_ = [*IMηintneg_, *([nan]*self.Nsep), *IMηintpos_]
+            y_ = *IMηintneg_, *([nan]*self.Nsep), *IMηintpos_
             ax2.plot(x_, y_, 'o-', color=DFNP2D.get_color(labels_, n), label=label)
         ax2.set_ylabel(ax1.get_ylabel().replace('′', '″'))
         self.plot_interfaces(ax2)
@@ -1400,8 +1408,8 @@ class JTFP2D(DFNP2D):
         else:
             REjLP__ = 0
             IMjLP__ = 0
-            REηLP__ = self.REφe__[:, :Nneg] - REφsneg__ - RSEI2aeffneg*(REjintneg__ + REjDLneg__)
-            IMηLP__ = self.IMφe__[:, :Nneg] - IMφsneg__ - RSEI2aeffpos*(IMjintneg__ + IMjDLneg__)
+            REηLP__ = REφsneg__ - REφe__[:, :Nneg] - RSEI2aeffneg*(REjintneg__ + REjDLneg__)
+            IMηLP__ = IMφsneg__ - IMφe__[:, :Nneg] - RSEI2aeffpos*(IMjintneg__ + IMjDLneg__)
         Nf = self.f_.size
         ω_ = self.ω_
         F = DFNP2D.F
@@ -1537,12 +1545,15 @@ if __name__=='__main__':
         # complete=False
         )
 
-    I = -15
+    I = -10
     cell.count_lithium()
+    thermalModel = True
     cell.EIS()
-    cell.CC(I, 1500, thermalModel=0).EIS()
+    cell.CC(I, 1500, thermalModel).EIS()
+    cell.CC(-I, 2300, thermalModel).EIS()
+    cell.CC(I, 2000, thermalModel).EIS()
+    cell.CC(0, 3700, thermalModel).EIS()
     # cell.check_EIS()
-
     cell.count_lithium()
 
     '''

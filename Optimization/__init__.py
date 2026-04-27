@@ -145,7 +145,7 @@ class Optimizer:
         if self.n_jobs==1:
             y_ = [self.function(x_) for x_ in X__]  # 所有个体的目标函数值
         else:
-            y_ = joblib.Parallel(n_jobs=self.n_jobs, backend='loky')(
+            y_ = joblib.Parallel(n_jobs=self.n_jobs, backend='loky', batch_size=1)(
                  joblib.delayed(self.function)(x_) for x_ in X__)
         y_ = np.array(y_)
         self.Nfunctions += len(y_)
