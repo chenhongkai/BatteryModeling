@@ -3,17 +3,15 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from P2Dmodel.OCP import OpenCircuitPotential
+from P2Dmodel.OCP.OCPbase import OCPbase
 
 
-class LMO(OpenCircuitPotential):
+class LMO(OCPbase):
     def __init__(self):
 
         # COMSOL LMO
-        table = pd.read_excel(OpenCircuitPotential.path_OCP_from_COMSOL, sheet_name='LMO')
-        self.LMO_COMSOL = interp1d(table['θ'], table['OCP'],
-            bounds_error=False,
-            fill_value='extrapolate')
+        table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='LMO')
+        self.LMO_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
 
         del table
 

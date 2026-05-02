@@ -2,17 +2,15 @@
 import pandas as pd
 from scipy.interpolate import interp1d
 
-from P2Dmodel.OCP import OpenCircuitPotential
+from P2Dmodel.OCP.OCPbase import OCPbase
 
 
-class PseudoNegativeElectrode(OpenCircuitPotential):
+class PseudoNegativeElectrode(OCPbase):
+
     def __init__(self):
-
         # COMSOL 高电位负极
-        table = pd.read_excel(OpenCircuitPotential.path_OCP_from_COMSOL, sheet_name='PseudoNegativeElectrode')
-        self.PseudoNegativeElectrode_COMSOL = interp1d(table['θ'], table['OCP'],
-            bounds_error=False,
-            fill_value='extrapolate')
+        table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='PseudoNegativeElectrode')
+        self.PseudoNegativeElectrode_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
 
         del table
 

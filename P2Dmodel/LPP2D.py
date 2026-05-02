@@ -2,17 +2,19 @@
 from scipy.linalg.lapack import dgtsv
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import reverse_cuthill_mckee
-from numpy import pi, ndarray,\
-    array, arange, zeros, empty, ones, full, linspace, hstack, concatenate, tile, \
+from numpy import ndarray,\
+    array, arange, zeros, empty, ones, full, hstack, concatenate, tile, \
     zeros_like,\
     exp, sqrt, sinh, cosh, arcsinh, outer, \
     ix_, isnan
 from numpy.linalg import solve
 
-from P2Dmodel import DFNP2D, triband_to_dense
+from P2Dmodel.P2Dbase import P2Dbase
+from P2Dmodel.OCP import NMC111, Graphite
+from P2Dmodel.tools import triband_to_dense
 
 
-class LPP2D(DFNP2D):
+class LPP2D(P2Dbase):
     """锂离子电池集总参数准二维模型 Lumped-Parameter Pseudo-two-Dimension model"""
 
     def __init__(self,
@@ -31,11 +33,11 @@ class LPP2D(DFNP2D):
             Dspos: float = 1.4e-3,  # 正极集总固相锂离子扩散系数 [1/s]
             De: float = 0.2,        # 集总离子扩散率/电导率之比 [A/S]
             κD: float = 4.39e-4,    # 电解液集总扩散离子电导率系数 [V/K]
+            RSEIneg: float = 6.91e-5,  # 负极集总SEI膜内阻 [Ω]
+            RSEIpos: float = 2e-5,     # 正极集总SEI膜内阻 [Ω]
             kneg: float = 32.,      # 负极集总反应速率常数 [A]
             kpos: float = 42.,      # 正极集总反应速率常数 [A]
             kLP: float = 3.607e-6,  # 负极集总析锂反应速率常数 [A]
-            RSEIneg: float = 6.91e-5,  # 负极集总SEI膜内阻 [Ω]
-            RSEIpos: float = 2e-5,     # 正极集总SEI膜内阻 [Ω]
             CDLneg: float = 144.691,   # 负极集总双电层电容 [F]
             CDLpos: float = 19.971,    # 正极集总双电层电容 [F]
             l: float = 1e-13,          # 等效电感 [H]
@@ -49,19 +51,47 @@ class LPP2D(DFNP2D):
             θminpos: float = None,  # SOC=100%的正极嵌锂状态 [–]
             θmaxpos: float = None,  # SOC=0%的正极嵌锂状态 [–]
             SOC0: float = 0.5,   # 初始荷电状态 [–]
-            T0: float = 298.15,  # 初始温度 [K]
             **kwargs,):
-        DFNP2D.__init__(self, fullyInitialize=False, **kwargs)
-        # 6容量参数
         self.Qcell = Qcell; assert Qcell>0, f'电池理论可用容量{Qcell = }，应大于0 [Ah]'
-        self.Qneg = Qneg; assert Qneg>0, f'负极容量{Qneg = }，应大于0 [Ah]'
-        self.Qpos = Qpos; assert Qpos>0, f'正极容量{Qpos = }，应大于0 [Ah]'
-        if Qcell>=Qneg or Qcell>=Qpos: raise DFNP2D.Error(f'电池理论可用容量{Qcell = }应小于负极容量{Qneg = }和正极容量{Qpos = }',
-                                                          {'Qcell': Qcell, 'Qneg': Qneg, 'Qpos': Qpos})
+        # 4边界嵌锂状态参数、负极、正极容量Qneg Qpos
+        if all(v is not None for v in (θminneg, θmaxneg, θminpos, θmaxpos)):
+            # 4θ均非None，使用给定4θ，忽略4等式关系，并重新计算Qneg、Qpos')
+            assert 0<θminneg<θmaxneg<1, f'负极最小、最大嵌锂状态{θminneg = }，{θmaxneg = }，应满足0<θminneg<θmaxneg<1'
+            assert 0<θminpos<θmaxpos<1, f'正极最小、最大嵌锂状态{θminpos = }，{θmaxpos = }，应满足0<θminpos<θmaxpos<1'
+            self.Qneg = Qcell/(θmaxneg - θminneg)
+            self.Qpos = Qcell/(θmaxpos - θminpos)
+        else:
+            # 使用4等式由Qcell、Qneg、Qpos计算4θ
+            if Qcell>=Qneg or Qcell>=Qpos:
+                raise P2Dbase.Error(f'电池理论可用容量{Qcell = }应小于负极容量{Qneg = }与正极容量{Qpos = }', {'Qcell': Qcell, 'Qneg': Qneg, 'Qpos': Qpos})
+            self.Qneg = Qneg; assert Qneg>0, f'负极容量{Qneg = }，应大于0 [Ah]'
+            self.Qpos = Qpos; assert Qpos>0, f'正极容量{Qpos = }，应大于0 [Ah]'
+            UOCPneg = kwargs.pop('UOCPneg', None)  # 从 kwargs 获取 UOCPneg
+            UOCPpos = kwargs.pop('UOCPpos', None)  # 从 kwargs 获取 UOCPpos
+            if UOCPneg is None:
+                UOCPneg = Graphite().Graphite_COMSOL
+            else:
+                assert callable(UOCPneg), '函数UOCPneg，输入负极嵌锂状态θsneg_ [–]，输出正极开路电位UOCPneg_ [V]'
+            if UOCPpos is None:
+                UOCPpos = NMC111().NMC111_COMSOL
+            else:
+                assert callable(UOCPpos), '函数UOCPpos，输入正极嵌锂状态θspos_ [–]，输出负极开路电位UOCPpos_ [V]'
+            assert Umax>Umin>0, f'运行电压{Umax = }，{Umin = }，应满足Umax > Umin > 0 [V]'
+            θminneg, θmaxneg, θminpos, θmaxpos, ΔFmax = P2Dbase.solve_4θ(
+                UOCPneg, UOCPpos, Qcell, Qneg, Qpos,
+                Umin, Umax)
+            tempdict = {'θminneg': θminneg, 'θmaxneg': θmaxneg, 'θminpos': θminpos, 'θmaxpos': θmaxpos, 'ΔFmax': ΔFmax}
+            if not ΔFmax<1e-5:
+                raise P2Dbase.Error(f'求4个边界嵌锂状态，不收敛，无解！F函数最大绝对误差{ΔFmax = }', tempdict)
+            if not 0<θminneg<θmaxneg<1:
+                raise P2Dbase.Error(f'{θminneg = }，{θmaxneg = }，应满足0<θminneg<θmaxneg<1', tempdict)
+            if not 0<θminpos<θmaxpos<1:
+                raise P2Dbase.Error(f'{θminpos = }，{θmaxpos = }，应满足0<θminpos<θmaxpos<1', tempdict)
+        # 3电解液锂电荷量
         self.qeneg = qeneg; assert qeneg>0, f'负极电解液锂离子电荷量{qeneg = }，应大于0 [C]'
         self.qesep = qesep; assert qesep>0, f'隔膜电解液锂离子电荷量{qesep = }，应大于0 [C]'
         self.qepos = qepos; assert qepos>0, f'正极电解液锂离子电荷量{qepos = }，应大于0 [C]'
-        # 9输运参数
+        # 11输运参数
         self.σneg = σneg; assert σneg>0, f'负极集总固相电导率{σneg = }，应大于0 [S]'
         self.σpos = σpos; assert σpos>0, f'正极集总固相电导率{σpos = }，应大于0 [S]'
         self.κneg = κneg; assert κneg>0, f'负极电解液集总离子电导率{κneg = }，应大于0 [S]'
@@ -71,157 +101,59 @@ class LPP2D(DFNP2D):
         self.Dspos = Dspos; assert Dspos>0, f'正极集总固相锂离子扩散系数{Dspos = }，应大于0 [1/s]'
         self.De = De; assert De>0, f'集总离子扩散率/电导率之比{De = }，应大于0 [A/S]'
         self.κD = κD; assert κD>0, f'集总扩散电解液离子电导率系数{κD = }，应大于0 [V/K]'
+        self.RSEIneg = RSEIneg; assert RSEIneg>=0, f'负极集总SEI膜电阻{RSEIneg = }，应大于或等于0 [Ω]'
+        self.RSEIpos = RSEIpos; assert RSEIpos>=0, f'正极集总SEI膜电阻{RSEIpos = }，应大于或等于0 [Ω]'
         # 5动力学参数
         self.kneg = kneg; assert kneg>0, f'负极集总主反应速率常数{kneg = }，应大于0 [A]'
         self.kpos = kpos; assert kpos>0, f'正极集总主反应速率常数{kpos = }，应大于0 [A]'
         self.kLP = kLP;   assert kLP>0, f'负极集总析锂反应速率常数{kLP = }，应大于0 [A]'
-        self.RSEIneg = RSEIneg; assert RSEIneg>=0, f'负极集总SEI膜电阻{RSEIneg = }，应大于或等于0 [Ω]'
-        self.RSEIpos = RSEIpos; assert RSEIpos>=0, f'正极集总SEI膜电阻{RSEIpos = }，应大于或等于0 [Ω]'
         # 3电抗参数
         self.CDLneg = CDLneg; assert CDLneg>=0, f'负极集总双电层电容{CDLneg = }，应大于或等于0 [F]'
         self.CDLpos = CDLpos; assert CDLpos>=0, f'正极集总双电层电容{CDLpos = }，应大于或等于0 [F]'
         self.l = l;           assert l>=0, f'等效电感{l = }，应大于或等于0 [H]'
-        # 交换电流密度
-        self.I0intneg = self.i0intneg = I0intneg; assert (I0intneg is None) or (I0intneg>0), f'负极主反应集总交换电流密度{I0intneg = }，应大于0 [A]'
-        self.I0intpos = self.i0intpos = I0intpos; assert (I0intpos is None) or (I0intpos>0), f'正极主反应集总交换电流密度{I0intpos = }，应大于0 [A]'
-        self.I0LP = self.i0LP = I0LP;             assert (I0LP is None)  or (I0LP>0), f'负极析锂反应集总交换电流密度{I0LP = }，应大于0 [A]'
-        # 运行电压
-        assert Umax>Umin>0, f'{Umax = }，{Umin = }，应满足Umax > Umin > 0 [V]'
-        self.Umin = Umin  # 100%SOC开路电压 [V]
-        self.Umax = Umax  # 0%SOC开路电压 [V]
-        # 4边界嵌锂状态参数
-        if all(v is not None for v in (θminneg, θmaxneg, θminpos, θmaxpos)):
-            assert 0<θminneg<θmaxneg<1, f'负极最小、最大嵌锂状态{θminneg = }，{θmaxneg = }，应满足0<θminneg<θmaxneg<1'
-            assert 0<θminpos<θmaxpos<1, f'正极最小、最大嵌锂状态{θminpos = }，{θmaxpos = }，应满足0<θminpos<θmaxpos<1'
-            if self.verbose:
-                print('4个边界嵌锂状态均非None，使用给定的4个边界嵌锂状态，忽略4等式关系，并重新计算负极、正极容量Qneg、Qpos')
-            self.Qneg = self.Qcell/(θmaxneg - θminneg)
-            self.Qpos = self.Qcell/(θmaxpos - θminpos)
-        else:
-            # 使用4等式由Qcell、Qneg、Qpos计算4θ
-            θminneg, θmaxneg, θminpos, θmaxpos, ΔFmax = DFNP2D.solve_4θ(
-                self.UOCPneg, self.UOCPpos,
-                self.Qcell, self.Qneg, self.Qpos,
-                self.Umin, self.Umax)
-            if self.verbose:
-                print(f'由Qcell、Qneg、Qpos求4个边界嵌锂状态，F函数最大绝对误差{ΔFmax}')
-            tempdict = {'θminneg': θminneg, 'θmaxneg': θmaxneg, 'θminpos': θminpos, 'θmaxpos': θmaxpos, 'ΔFmax': ΔFmax}
-            if not ΔFmax<1e-5:
-                raise DFNP2D.Error(f'求4个边界嵌锂状态，不收敛，无解！F函数最大绝对误差{ΔFmax = }', tempdict)
-            if not 0<θminneg<θmaxneg<1:
-                raise DFNP2D.Error(f'负极嵌锂状态{θminneg = }，{θmaxneg = }，应满足0<θminneg<θmaxneg<1', tempdict)
-            if not 0<θminpos<θmaxpos<1:
-                raise DFNP2D.Error(f'正极嵌锂状态{θminpos = }，{θmaxpos = }，应满足0<θminpos<θmaxpos<1', tempdict)
-        self.θminneg = θminneg  # SOC=0%的负极嵌锂状态
-        self.θmaxneg = θmaxneg  # SOC=100%的负极嵌锂状态
-        self.θmaxpos = θmaxpos  # SOC=0%的正极嵌锂状态
-        self.θminpos = θminpos  # SOC=100%的正极嵌锂状态
-        # 作图变量单位
-        self.xUnit = ''  # 横坐标x单位
-        self.rUnit = ''  # 径向标r单位
-        self.θUnit = self.cUnit = ''        # 浓度单位
-        self.JUnit = self.jUnit = 'A'       # 局部体积电流密度单位
-        self.I0Unit = self.i0Unit = 'A'     # 交换电流密度单位
-        self.xSign = r'$\overline{\it x}$'  # 横坐标x符号
-        self.rSign = r'$\overline{\it r}$'  # 横坐标r符号
-        self.θSign = self.cSign = r'${\it θ}$'        # 浓度符号
-        self.JSign = self.jSign = r'${\it J}$'        # 局部体积电流密度符号
-        self.I0Sign = self.i0Sign = r'${\it I}_{0}$'  # 交换电流密度符号
-        Nneg, Npos, Ne, Nr = self.Nneg, self.Npos, self.Ne, self.Nr
-        # 状态量
-        self.θsneg__, self.θspos__ = empty((Nr, Nneg)), empty((Nr, Npos))  # 负极、正极固相内部无量纲锂离子浓度场 [–]
-        self.θsnegsurf_, self.θspossurf_ = empty(Nneg), empty(Npos)        # 负极、正极固相表面无量纲锂离子浓度场 [–]
-        self.θe_ = empty(Ne)                                        # 电解液无量纲锂离子浓度场 [–]
-        self.Jintneg_, self.Jintpos_ = empty(Nneg), empty(Npos)    # 负极、正极集总主反应局部体积电流密度场 [A]
-        self.JDLneg_, self.JDLpos_ = empty(Nneg), empty(Npos)      # 负极、正极集总双电层效应局部体积电流密度场 [A]
-        self.I0intneg_, self.I0intpos_ = empty(Nneg), empty(Npos)  # 负极、正极主反应集总交换电流密度 [A]
-        self.Jneg_, self.Jpos_ = empty(Nneg), empty(Npos)          # 负极、正极总局部体积电流密度场 [A]
-        if self.lithiumPlating:
-            self.JLP_ = empty(Nneg)   # 负极析锂局部体积电流密度场 [A/m^3]
-            self.I0LP_ = empty(Nneg)  # 负极析锂反应集总交换电流密度场 [A]
-        # 恒定量
-        (self.r_,         # (Nr,) 球形固相颗粒半径方向控制体中心的坐标 [–]
-        self.Δr_,        # (Nr,) 球形固相颗粒球壳控制体厚度 [–]
-        self.bandKθs__,  # (3, Nr) 固相锂离子浓度矩阵的带
-        # 索引集总因变量
-        self.idxθsneg_, self.idxθspos_, self.idxθsnegsurf_, self.idxθspossurf_, self.idxθe_,
-        self.idxJintneg_, self.idxJintpos_, self.idxJDLneg_, self.idxJDLpos_, self.idxJLP_,
-        self.idxI0intneg_, self.idxI0intpos_,
-        self.idxθ_, self.idxJ_,
-        ) = (None,)*17
-        # 初始化
-        if type(self) is LPP2D:
-            self.initialize(
-                SOC0=SOC0,  # 初始荷电状态 [–]
-                T0=T0)      # 初始温度 [K]
-
-    def initialize(self,
-            SOC0: int | float = 0.,    # 初始荷电状态 [–]
-            T0: int | float = 298.15,  # 初始温度 [K]
-            ):
-        """初始化"""
-        if self.verbose and type(self) is LPP2D:
-            print(f'集总参数P2D模型初始化...')
-        assert 0<=SOC0<=1, f'初始荷电状态{SOC0 = }，取值范围应为[0, 1]'
-        self.T = T0; assert T0>0, f'初始温度{T0 = }，应大于0 [K]'
-        self.I = 0.  # 初始化：电流 [A]
-        self.t = 0.  # 初始化：时刻 [s]
+        # 3交换电流密度
+        self._I0intneg = self._i0intneg = I0intneg; assert (I0intneg is None) or (I0intneg>0), f'负极主反应集总交换电流密度{I0intneg = }，应大于0 [A]'
+        self._I0intpos = self._i0intpos = I0intpos; assert (I0intpos is None) or (I0intpos>0), f'正极主反应集总交换电流密度{I0intpos = }，应大于0 [A]'
+        self._I0LP = self._i0LP = I0LP;             assert (I0LP is None)  or (I0LP>0), f'负极析锂反应集总交换电流密度{I0LP = }，应大于0 [A]'
+        # P2D通用参数
+        P2Dbase.__init__(self, SOC0=SOC0,
+                         UOCPneg=UOCPneg, UOCPpos=UOCPpos,
+                         θminneg=θminneg, θmaxneg=θmaxneg,
+                         θminpos=θminpos, θmaxpos=θmaxpos, **kwargs)
         Nneg, Nsep, Npos, Ne, Nr = self.Nneg, self.Nsep, self.Npos, self.Ne, self.Nr  # 读取：网格数
-        # 恒定量
-        self.Δxneg = Δxneg = 1/Nneg  # 负极网格厚度 [–]
-        self.Δxsep = Δxsep = 1/Nsep  # 隔膜网格厚度 [–]
-        self.Δxpos = Δxpos = 1/Npos  # 正极网格厚度 [–]
-        self.x_ = concatenate([
-            linspace(0, 1, Nneg + 1)[:-1] + Δxneg/2,
-            linspace(1, 2, Nsep + 1)[:-1] + Δxsep/2,
-            linspace(2, 3, Npos + 1)[:-1] + Δxpos/2,])  # (Ne,) 各控制体中心坐标 [–]
-        self.generate_x_related_coordinates()
+        lithiumPlating, radialDiscretization, decouple_cs, complete, verbose = (
+            self.lithiumPlating, self.radialDiscretization, self.decouple_cs, self.complete, self.verbose)  # 读取：模式
+        # 若不考虑双电层效应，正负极双电层电容赋0
         if not self.doubleLayerEffect:
-            self.CDLneg = self.CDLpos = 0  # 若不考虑双电层效应，正负极双电层电容赋0
-        # 固相锂离子浓度矩阵
-        match self.radialDiscretization:
-            case 'EI':  # 等间隔划分球壳网格
-                Δr = 1/Nr  # 球壳网格厚度 [–]
-                self.r_ = (Δr*arange(1, Nr+1) + Δr*arange(0, Nr))/2  # 颗粒半径方向控制体中心的坐标 [–]
-                self.Δr_ = full(Nr, Δr)                                 # 颗粒球壳网格厚度序列 [–]
-            case 'EV':  # 等体积划分球壳网格
-                V = 4/3*pi  # 颗粒体积 [–]
-                ΔV = V/Nr   # 球壳控制体体积 [–]
-                rW_ = (ΔV*arange(0, Nr)/(4/3*pi))**(1/3)     # Nr维向量：球壳内界面坐标 [–]
-                rE_ = (ΔV*arange(1, Nr + 1)/(4/3*pi))**(1/3) # Nr维向量：球壳外界面坐标 [–]
-                self.r_ = (rW_ + rE_)/2
-                self.Δr_ = rE_ - rW_
-        r_  = self.rneg_  = self.rpos_  = self.r_
-        Δr_ = self.Δrneg_ = self.Δrpos_ = self.Δr_
-        self.Vr_ = (r_ + Δr_/2)**3 - (r_ - Δr_/2)**3  # 从中心到边缘负极固相颗粒球壳体积分数序列 [–]
-        self.initialize_linear_matrix()
+            self.CDLneg = self.CDLpos = 0
         # 状态量
-        θsneg = self.θminneg + SOC0*(self.θmaxneg - self.θminneg)  # 初始化：负极嵌锂状态 [–]
-        θspos = self.θmaxpos - SOC0*(self.θmaxpos - self.θminpos)  # 初始化：正极嵌锂状态 [–]
-        self.θsneg__[:] = θsneg  # 初始化：负极固相颗粒内部无量纲锂离子浓度场 [–]
-        self.θspos__[:] = θspos  # 初始化：正极固相颗粒内部无量纲锂离子浓度场 [–]
-        self.θsnegsurf_[:] = θsneg     # 初始化：负极固相颗粒表面无量纲锂离子浓度场 [–]
-        self.θspossurf_[:] = θspos     # 初始化：正极固相颗粒表面无量纲锂离子浓度场 [–]
-        self.θe_[:] = 1.                # 初始化：电解液无量纲锂离子浓度场 [–]
-        self.φsneg_[:] = UOCPneg = self.solve_UOCPneg_(θsneg)  # 初始化：负极固相电势场 [V]
-        self.φspos_[:] = UOCPpos = self.solve_UOCPpos_(θspos)  # 初始化：正极固相电势场 [V]
-        self.φe_[:] = 0.        # 初始化：电解液电势场 [V]
-        self.Jintneg_[:], self.Jintpos_[:] = 0., 0.  # 初始化：负极、正极主反应集总局部体积电流密度 [A]
-        self.JDLneg_[:], self.JDLpos_[:] = 0., 0.    # 初始化：负极、正极双电层效应集总局部体积电流场 [A]
-        self.I0intneg_[:] = self.I0intneg if self._I0intneg else LPP2D.solve_I0int_(self.kneg, θsneg, 1)
-        self.I0intpos_[:] = self.I0intpos if self._I0intpos else LPP2D.solve_I0int_(self.kpos, θspos, 1)
-        self.ηintneg_[:], self.ηintpos_[:] = 0., 0.           # 初始化：负极、正极主反应过电位场 [V]
-        self.Jneg_[:], self.Jpos_[:] = 0., 0.                 # 初始化：负极、正极总局部体积电流密度 [A]
-        self.ηLPneg_[:], self.ηLPpos_[:]  = UOCPneg, UOCPpos  # 初始化：负极、正极析锂反应过电位场 [V]
-        if self.lithiumPlating:
-            self.JLP_[:] = 0.  # 初始化：负极析锂反应集总局部体积电流 [A]
-            self.I0LP_[:] = self.I0LP if self._I0LP else LPP2D.solve_I0LP_(self.kLP, 1)  # 初始化：负极析锂反应集总交换电流密度 [A]
-        self.QLP = 0.  # 初始化：累计析锂量 [Ah]
+        assert 0<=SOC0<=1, f'初始荷电状态{SOC0 = }，取值范围应为[0, 1]'
+        θsneg = θminneg + SOC0*(θmaxneg - θminneg)  # 初始负极嵌锂状态 [–]
+        θspos = θmaxpos - SOC0*(θmaxpos - θminpos)  # 初始正极嵌锂状态 [–]
+        self.θsneg__, self.θspos__ = full((Nr, Nneg), θsneg), full((Nr, Npos), θspos)  # 初始化：负极、正极固相内部无量纲锂离子浓度场 [–]
+        self.θsnegsurf_, self.θspossurf_ = full(Nneg, θsneg), full(Npos, θspos)        # 初始化：负极、正极固相表面无量纲锂离子浓度场 [–]
+        self.θe_ = ones(Ne)                                              # 初始化：电解液无量纲锂离子浓度场 [–]
+        self.φsneg_ = full(Nneg, UOCPneg := self.solve_UOCPneg_(θsneg))  # 初始化：负极固相电势场 [V]
+        self.φspos_ = full(Npos, UOCPpos := self.solve_UOCPpos_(θspos))  # 初始化：正极固相电势场 [V]
+        self.φe_ = zeros(Ne)                                     # 初始化：电解液电势场 [V]
+        self.Jintneg_, self.Jintpos_ = zeros(Nneg), zeros(Npos)  # 初始化：负极、正极集总主反应局部体积电流密度场 [A]
+        self.JDLneg_, self.JDLpos_ = zeros(Nneg), zeros(Npos)    # 初始化：负极、正极集总双电层效应局部体积电流密度场 [A]
+        I0intneg = self.I0intneg if self._I0intneg else LPP2D.solve_I0int_(self.kneg, θsneg, 1)
+        I0intpos = self.I0intpos if self._I0intpos else LPP2D.solve_I0int_(self.kpos, θspos, 1)
+        self.I0intneg_, self.I0intpos_ = full(Nneg, I0intneg), full(Npos, I0intpos)  # 初始化：负极、正极主反应集总交换电流密度 [A]
+        self.ηintneg_, self.ηintpos_ = zeros(Nneg), zeros(Npos)                # 初始化：负极、正极主反应过电位场 [V]
+        self.Jneg_, self.Jpos_ = zeros(Nneg), zeros(Npos)                      # 初始化：负极、正极总局部体积电流密度场 [A]
+        self.ηLPneg_, self.ηLPpos_ = full(Nneg, UOCPneg), full(Npos, UOCPpos)  # 初始化：负极、正极析锂反应过电位场 [V]
+        if lithiumPlating:
+            self.JLP_ = zeros(Nneg)        # 初始化：负极析锂局部体积电流密度场 [A/m^3]
+            I0LP = self.I0LP if self._I0LP else LPP2D.solve_I0LP_(self.kLP, 1)
+            self.I0LP_ = full(Nneg, I0LP)  # 初始化：负极析锂反应集总交换电流密度场 [A]
+        # 恒定量
+        self.x_, self.Δx_, self.ΔxWest_, self.ΔxEast_ = P2Dbase.generate_x_related_coordinates(Nneg, Nsep, Npos, 1, 1, 1)
+        self.r_, self.Δr_, self.Vr_ = P2Dbase.generate_r_related_coordinates(Nr, 1, radialDiscretization)
+        self.rneg_ = self.rpos_ = self.r_
         # 需记录的数据名称
-        self.datanames_ = ['U', 'I', 't',         # 端电压 [V]、电流 [A]、时刻 [s]
-                           'ηLPneg_', 'ηLPpos_',  # 负极、正极表面析锂反应过电位场 [V]
-                           ]
-        if self.complete:
+        if complete:
             self.datanames_.extend([
                 'θsneg__', 'θspos__',        # 负极、正极固相无量纲锂离子浓度场 [–]
                 'θsnegsurf_', 'θspossurf_',  # 负极、正极表面无量纲锂离子浓度场 [–]
@@ -234,55 +166,44 @@ class LPP2D(DFNP2D):
                 'ηintneg_', 'ηintpos_',      # 负极、正极主反应过电位场 [V]
                 'θsneg', 'θspos', 'SOC',     # 负极、正极嵌锂状态、全电池荷电状态 [–]
                 'T', 'Qgen',])               # 温度 [K]、产热量 [W]
-            if self.lithiumPlating:
+            if lithiumPlating:
                 self.datanames_.extend(['JLP_'])  # 负极析锂集总局部体积电流密度场 [A]
         self.data = {name: [] for name in self.datanames_}  # 字典：存储呈时间序列的运行数据
-        if self.verbose and type(self) is LPP2D:
-            print(self)
-            print(f'集总参数P2D模型初始化完成!')
-        return self
+        # 集总因变量索引
+        N = self.generate_indices_of_dependent_variables()  # 集总因变量索引
+        self.K__ = K__ = zeros((N, N))                      # 因变量线性矩阵
+        self.idxθsneg_ = idxθsneg_ = self.idxcsneg_              # 索引：负极固相内部浓度 先排颗粒径向r，再排x方向
+        self.idxθspos_ = idxθspos_ = self.idxcspos_              # 索引：正极固相内部浓度
+        self.idxθsnegsurf_ = idxθsnegsurf_ = self.idxcsnegsurf_  # 索引：正极固相表面浓度
+        self.idxθspossurf_ = idxθspossurf_ = self.idxcspossurf_  # 索引：正极固相表面浓度
+        self.idxθe_ = self.idxce_                # 索引：电解液浓度
+        self.idxJintneg_ = self.idxjintneg_      # 索引：负极主反应局部体积电流密度
+        self.idxJintpos_ = self.idxjintpos_      # 索引：正极主反应局部体积电流密度
+        self.idxJDLneg_ = self.idxjDLneg_        # 索引：负极双电层局部体积电流密度
+        self.idxJDLpos_ = self.idxjDLpos_        # 索引：正极双电层局部体积电流密度
+        self.idxI0intneg_ = self.idxi0intneg_    # 索引：负极主反应交换电流密度
+        self.idxI0intpos_ = self.idxi0intpos_    # 索引：正极主反应交换电流密度
+        self.idxJLP_ = self.idxjLP_              # 索引：负极析锂反应局部体积电流密度
+        self.idxθ_ = self.idxc_                  # 索引：所有浓度量
+        self.idxJ_ = self.idxj_                  # 索引：所有局部体积电流量
 
-    def initialize_linear_matrix(self):
-        """初始化因变量线性矩阵K__"""
-        N = self.generate_indices_of_dependent_variables()
-        self.K__ = K__ = zeros([N, N])  # 因变量线性矩阵
-        if self.verbose:
-            print(f'初始化因变量线性矩阵 K__.shape = {K__.shape}')
-        # 覆盖对应集总因变量索引
-        idxθsneg_ = self.idxθsneg_ = self.idxcsneg_
-        idxθspos_ = self.idxθspos_ = self.idxcspos_
-        idxθsnegsurf_ = self.idxθsnegsurf_ = self.idxcsnegsurf_
-        idxθspossurf_ = self.idxθspossurf_ = self.idxcspossurf_
-        self.idxθe_ = self.idxce_
-        self.idxθ_ =self.idxc_
-        self.idxJintneg_ = self.idxjintneg_
-        self.idxJintpos_ = self.idxjintpos_
-        self.idxJLP_ = self.idxjLP_
-        self.idxJDLneg_ = self.idxjDLneg_
-        self.idxJDLpos_ = self.idxjDLpos_
-        self.idxJ_ = self.idxj_
-        self.idxI0intneg_ = self.idxi0intneg_
-        self.idxI0intpos_ = self.idxi0intpos_
-        
-        ## 对K__矩阵赋参数相关值 ##
-        if decouple_cs := self.decouple_cs:
+        # 对K__矩阵赋参数相关值
+        if decouple_cs:
             pass
         else:
             self.update_K__idxθsnegsurf_idxJintneg_(self.Qneg, self.Dsneg)
             self.update_K__idxθspossurf_idxJintpos_(self.Qpos, self.Dspos)
         self.update_K__idxφsneg_idxJneg_(self.σneg)
         self.update_K__idxφspos_idxJpos_(self.σpos)
-        self.update_K__idxφe_idxφe_(κ_:=self.κ_, κ_)
+        self.update_K__idxφe_idxφe_(κ_ := self.κ_, κ_)
         self.update_K__idxηintneg_idxJneg_(self.RSEIneg)
         self.update_K__idxηintpos_idxJpos_(self.RSEIpos)
-        if self.lithiumPlating:
+        if lithiumPlating:
             self.update_K__idxηLP_idxJneg_(self.RSEIneg)
-
-        ## 对K__矩阵赋固定值 ##
-        DFNP2D.assign_K__with_constants(self)
-        # 集总参数模型需额外赋固定值（原始模型的此处为参数Rsneg、Rspos相关的值）
-        Nneg, Npos, Nr = self.Nneg, self.Npos, self.Nr  # 读取：网格数
-        r_, Δr_ = self.r_, self.Δr_                     # 读取：颗粒网格坐标 [–]
+        # 对K__矩阵赋固定值
+        self.assign_K__with_constants()
+        # 对K__矩阵赋固定值，原始模型的此处为参数Rsneg、Rspos相关的值
+        r_, Δr_ = self.r_, self.Δr_   # 读取：颗粒网格坐标 [–]
         r_3, r_2, r_1 = r_[-3:]
         a3, a2, a1 = 1 - r_[-3:]
         self.coeffs_ = array([
@@ -302,7 +223,6 @@ class LPP2D(DFNP2D):
             K__[idxθspossurf_, idxθspos_[Nr-1::Nr]] = a2*a3 / (-a1*(r_1 - r_2)*(r_1 - r_3))
             K__[idxθsnegsurf_, idxθsnegsurf_] = \
             K__[idxθspossurf_, idxθspossurf_] = 1/a1 + 1/a2 + 1/a3
-
         self.bandKθs__ = bandKθs__ = zeros((3, Nr))  # 固相浓度三对角矩阵的带
         Kθs__ = zeros((Nr, Nr))  # 固相浓度矩阵
         idx_ = arange(Nr)
@@ -319,6 +239,16 @@ class LPP2D(DFNP2D):
         bandKθs__[0, 1:]  = diag(1)   # 上对角线
         bandKθs__[1, :]   = diag(0)   # 主对角线
         bandKθs__[2, :-1] = diag(-1)  # 下对角线
+        if complete:
+            # 作图变量单位
+            self.xSign, self.xUnit = r'$\overline{\it x}$', ''  # 电极厚度方向坐标x符号、单位
+            self.rSign, self.rUnit = r'$\overline{\it r}$', ''  # 颗粒径向坐标r符号、单位
+            self.θSign, self.θUnit = self.cSign, self.cUnit = r'${\it θ}$', ''  # 锂离子浓度θ符号、单位
+            self.JSign, self.JUnit = self.jSign, self.jUnit = r'${\it J}$', 'A' # 集总局部体积电流密度J符号、单位
+            self.I0Sign, self.I0Unit = self.i0Sign, self.i0Unit = r'${\it I}_{0}$', 'A'  # 集总交换电流密度I0符号、单位
+        if verbose and type(self) is LPP2D:
+            print(self)
+            print(f'集总参数P2D模型(LPP2D)初始化完成!')
 
     def update_K__idxθsnegsurf_idxJintneg_(self, Qneg, Dsneg):
         # 更新K__矩阵θsnegsurf行Jintneg列
@@ -330,34 +260,23 @@ class LPP2D(DFNP2D):
 
     def update_K__idxφsneg_idxJneg_(self, σneg):
         # 更新K__矩阵φsneg行Jneg列
-        DFNP2D.update_K__idxφsneg_idxjneg_(self, σneg)
+        self.update_K__idxφsneg_idxjneg_(σneg)
 
     def update_K__idxφspos_idxJpos_(self, σpos):
         # 更新K__矩阵φspos行Jpos列
-        DFNP2D.update_K__idxφspos_idxjpos_(self, σpos)
+        self.update_K__idxφspos_idxjpos_(σpos)
 
     def update_K__idxηintneg_idxJneg_(self, RSEIneg):
         # 更新K__矩阵ηintneg行Jneg列
-        DFNP2D.update_K__idxηintneg_idxjneg_(self, RSEIneg, 1)
+        self.update_K__idxηintneg_idxjneg_(RSEIneg, 1)
 
     def update_K__idxηintpos_idxJpos_(self, RSEIpos):
         # 更新K__矩阵ηintpos行Jpos列
-        DFNP2D.update_K__idxηintpos_idxjpos_(self, RSEIpos, 1)
+        self.update_K__idxηintpos_idxjpos_(RSEIpos, 1)
 
     def update_K__idxηLP_idxJneg_(self, RSEIneg):
         # 更新K__矩阵ηLP行Jneg列
-        DFNP2D.update_K__idxηLP_idxjneg_(self, RSEIneg, 1)
-
-    def count_lithium(self):
-        """统计锂电荷量"""
-        qsneg = self.θsneg*self.Qneg       # 负极固相锂电荷量 [Ah]
-        qspos = self.θspos*self.Qpos       # 正极固相锂电荷量 [Ah]
-        qe = (self.θe_*self.Δx_*self.qe_).sum()/3600  # 电解液锂电荷量 [Ah]
-        qtot = qsneg + qspos + qe + self.QLP
-        print(f'合计锂电荷总量 {qtot: .6f} Ah = '
-              f'负极嵌锂{qsneg:.6f} Ah + 正极嵌锂{qspos:.6f} Ah'
-              f' + 电解液锂{qe:.6f} Ah'
-              f' + 负极析锂{self.QLP:.6f} Ah')
+        self.update_K__idxηLP_idxjneg_(RSEIneg, 1)
 
     def step(self, Δt):
         """时间步进：Newton法迭代所有因变量"""
@@ -384,7 +303,7 @@ class LPP2D(DFNP2D):
         idxJ_ = self.idxJ_
 
         # 读取方法
-        solve_banded_matrix = DFNP2D.solve_banded_matrix
+        solve_banded_matrix = P2Dbase.solve_banded_matrix
         solve_Jint_ = LPP2D.solve_Jint_
         solve_dJintdηint_ = LPP2D.solve_dJintdηint_
         solve_dJintdI0int_ = LPP2D.solve_dJintdI0int_
@@ -411,7 +330,7 @@ class LPP2D(DFNP2D):
 
         qe_ = self.qe_  # (Ne,) 各控制体电解液锂离子电荷量 [C]
         κ_ = self.κ_    # (Ne,) 各控制体电解液集总电导率 [S]
-        T, F, R = self.T, DFNP2D.F, DFNP2D.R   # 读取：温度 [K]、法拉第常数 [C/mol]、理想气体常数 [J/(mol·K)]
+        T, F, R = self.T, P2Dbase.F, P2Dbase.R   # 读取：温度 [K]、法拉第常数 [C/mol]、理想气体常数 [J/(mol·K)]
         Deκ_ = self.Deκ_  # # (Ne,) 各控制体电解液集总扩散系数 [A]
         F2RT = F/(2*R*T)  # 常数 [1/V]
         I = self.I        # 电流 [A]
@@ -786,7 +705,7 @@ class LPP2D(DFNP2D):
                     print('辨识重排因变量Jacobi矩阵的带宽 -> ', end='')
                 self.idxJreordered_ = idxJreordered_ = reverse_cuthill_mckee(csr_matrix(J__))
                 self.idxJrecovered_ = idxJreordered_.argsort()
-                self.bandwidthsJ_ = DFNP2D.identify_bandwidths(J__[ix_(idxJreordered_, idxJreordered_)])
+                self.bandwidthsJ_ = P2Dbase.identify_bandwidths(J__[ix_(idxJreordered_, idxJreordered_)])
                 if verbose:
                     print(f'上带宽{self.bandwidthsJ_['upper']}，下带宽{self.bandwidthsJ_['lower']}')
 
@@ -802,19 +721,19 @@ class LPP2D(DFNP2D):
             X_ -= ΔX_
 
             if isnan(X_).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现nan')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现nan')
             if (X_[idxθe_]<=0).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θe<=0')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θe<=0')
             θsnegsurf_ = X_[idxθsnegsurf_]
             θspossurf_ = X_[idxθspossurf_]
             if (θsnegsurf_<=0).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θsnegsurf<=0')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θsnegsurf<=0')
             if (θsnegsurf_>=1).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θsnegsurf>=1')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θsnegsurf>=1')
             if (θspossurf_<=0).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θspossurf<=0')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θspossurf<=0')
             if (θspossurf_>=1).any():
-                raise DFNP2D.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θspossurf>=1')
+                raise P2Dbase.Error(f'时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现θspossurf>=1')
 
             ΔX_ = abs(ΔX_)
             maxΔφ = ΔX_[idxφ_].max()  # 新旧电势场最大绝对误差
@@ -880,13 +799,21 @@ class LPP2D(DFNP2D):
 
         return nNewton  # 返回Newton迭代次数
 
+    def count_lithium(self):
+        """统计锂电荷量"""
+        qsneg = self.θsneg*self.Qneg  # 负极固相锂电荷量 [Ah]
+        qspos = self.θspos*self.Qpos  # 正极固相锂电荷量 [Ah]
+        qe = (self.θe_*self.Δx_*self.qe_).sum()/3600  # 电解液锂电荷量 [Ah]
+        qtot = qsneg + qspos + qe + self.QLP
+        print(f'合计锂电荷总量 {qtot: .6f} Ah = '
+              f'负极嵌锂{qsneg:.6f} Ah + 正极嵌锂{qspos:.6f} Ah'
+              f' + 电解液锂{qe:.6f} Ah'
+              f' + 负极析锂{self.QLP:.6f} Ah')
+
     @property
     def I0intneg(self):
         """负极主反应交换电流 [A]"""
-        if self.constants:
-            return self._I0intneg
-        else:
-            return DFNP2D.Arrhenius(self._I0intneg, self.Ekneg, self.T, self.Tref)
+        return self.Arrhenius(self._I0intneg, self.Ekneg)
     @I0intneg.setter
     def I0intneg(self, I0intneg):
         self._I0intneg = I0intneg
@@ -894,10 +821,7 @@ class LPP2D(DFNP2D):
     @property
     def I0intpos(self):
         """正极主反应交换电流 [A]"""
-        if self.constants:
-            return self._I0intpos
-        else:
-            return DFNP2D.Arrhenius(self._I0intpos, self.Ekpos, self.T, self.Tref)
+        return self.Arrhenius(self._I0intpos, self.Ekpos)
     @I0intpos.setter
     def I0intpos(self, I0intpos):
         self._I0intpos = I0intpos
@@ -905,10 +829,7 @@ class LPP2D(DFNP2D):
     @property
     def I0LP(self):
         """负极析锂反应交换电流 [A]"""
-        if self.constants:
-            return self._I0LP
-        else:
-            return DFNP2D.Arrhenius(self._I0LP, self.EkLP, self.T, self.Tref)
+        return self.Arrhenius(self._I0LP, self.EkLP)
     @I0LP.setter
     def I0LP(self, I0LP):
         self._I0LP = I0LP
@@ -916,10 +837,7 @@ class LPP2D(DFNP2D):
     @property
     def κneg(self):
         """负极电解液集总离子电导率 [S]"""
-        if self.constants:
-            return self._κneg
-        else:
-            return DFNP2D.Arrhenius(self._κneg, self.Eκ, self.T, self.Tref)
+        return self.Arrhenius(self._κneg, self.Eκ)
     @κneg.setter
     def κneg(self, κneg):
         self._κneg = κneg
@@ -927,10 +845,7 @@ class LPP2D(DFNP2D):
     @property
     def κsep(self):
         """隔膜电解液集总离子电导率 [S]"""
-        if self.constants:
-            return self._κsep
-        else:
-            return DFNP2D.Arrhenius(self._κsep, self.Eκ, self.T, self.Tref)
+        return self.Arrhenius(self._κsep, self.Eκ)
     @κsep.setter
     def κsep(self, κsep):
         self._κsep = κsep
@@ -938,10 +853,7 @@ class LPP2D(DFNP2D):
     @property
     def κpos(self):
         """正极电解液集总离子电导率 [S]"""
-        if self.constants:
-            return self._κpos
-        else:
-            return DFNP2D.Arrhenius(self._κpos, self.Eκ, self.T, self.Tref)
+        return self.Arrhenius(self._κpos, self.Eκ)
     @κpos.setter
     def κpos(self, κpos):
         self._κpos = κpos
@@ -966,10 +878,7 @@ class LPP2D(DFNP2D):
     def Deκ_(self):
         """(Ne,) 各控制体集总电解液锂离子扩散系数 [A]"""
         De3κ_ = self.De * array([self._κneg, self._κsep, self._κpos])
-        if self.constants:
-            pass
-        else:
-            De3κ_ = DFNP2D.Arrhenius(De3κ_, self.EDe, self.T, self.Tref)
+        De3κ_ = self.Arrhenius(De3κ_, self.EDe)
         return concatenate([
             full(self.Nneg, De3κ_[0]),
             full(self.Nsep, De3κ_[1]),
@@ -1105,17 +1014,17 @@ class LPP2D(DFNP2D):
     @staticmethod
     def solve_Jint_(T, I0int_, ηint_) -> ndarray:
         """求解主反应局部体积电流密度Jint [A]"""
-        return 2*I0int_*sinh(DFNP2D.F/(2*DFNP2D.R*T) * ηint_)
+        return 2*I0int_*sinh(P2Dbase.F/(2*P2Dbase.R*T)*ηint_)
 
     @staticmethod
     def solve_dJintdI0int_(T, ηint_) -> ndarray:
         """求解主反应局部体积电流密度Jint对交换电流密度I0int的偏导数 [A/A]"""
-        return 2*sinh(DFNP2D.F/(2*DFNP2D.R*T) * ηint_)
+        return 2*sinh(P2Dbase.F/(2*P2Dbase.R*T)*ηint_)
 
     @staticmethod
     def solve_dJintdηint_(T, I0int_, ηint_) -> ndarray:
         """求解主反应局部体积电流密度Jint对过电位ηint的偏导数 [A/V]"""
-        FRT = DFNP2D.F / (DFNP2D.R*T)
+        FRT = P2Dbase.F/(P2Dbase.R*T)
         return FRT*I0int_*cosh(FRT*0.5*ηint_)
 
     @staticmethod
@@ -1136,7 +1045,7 @@ class LPP2D(DFNP2D):
     @staticmethod
     def solve_JLP_(T, I0LP_, ηLP_) -> ndarray:
         """求解析锂反应局部体积电流密度JLP [A]"""
-        FRT = DFNP2D.F/DFNP2D.R/T
+        FRT = P2Dbase.F/P2Dbase.R/T
         a, b = 0.3*FRT, -0.7*FRT
         JLP_ = I0LP_*(exp(a*ηLP_) - exp(b*ηLP_))
         JLP_[ηLP_>=0] = 0
@@ -1145,7 +1054,7 @@ class LPP2D(DFNP2D):
     @staticmethod
     def solve_dJLPdθe_(T, θeneg_, I0LP_, ηLP_):
         """析锂反应局部体积电流密度JLP对电解液锂离子浓度θe的偏导数"""
-        FRT = DFNP2D.F/DFNP2D.R/T
+        FRT = P2Dbase.F/P2Dbase.R/T
         a, b = 0.3*FRT, -0.7*FRT
         dJLPdI0LP_ = exp(a*ηLP_) - exp(b*ηLP_)
         dI0LPdθe_ = 0.3*I0LP_/θeneg_
@@ -1156,7 +1065,7 @@ class LPP2D(DFNP2D):
     @staticmethod
     def solve_dJLPdηLP_(T, I0LP_, ηLP_):
         """求解析锂反应局部体积电流密度JLP对析锂过电位ηLP的偏导数 [A/V]"""
-        FRT = DFNP2D.F / (DFNP2D.R*T)
+        FRT = P2Dbase.F/(P2Dbase.R*T)
         a, b = 0.3*FRT, -0.7*FRT
         dJLPdηLP_ = I0LP_*(a*exp(a*ηLP_) - b*exp(b*ηLP_))
         dJLPdηLP_[ηLP_>=0] = 0
@@ -1300,25 +1209,11 @@ class LPP2D(DFNP2D):
         """各控制体交界面的坐标（用于作图） [–]"""
         return self.xInterfaces_
 
-    def plot_θ(self, *arg, **kwargs):
-        """作图：浓度场"""
-        self.plot_c(*arg, **kwargs)
-
-    def plot_Jint(self, *arg, **kwargs):
-        """作图：主反应局部体积电流密度、过电位、交换电流密度"""
-        self.plot_jint(*arg, **kwargs)
-
-    def plot_JDL(self, *arg, **kwargs):
-        """作图：双电层效应局部体积电流密度、电流"""
-        self.plot_jDL(*arg, **kwargs)
-
-    def plot_θsr(self, *arg, **kwargs):
-        """作图：双电层效应局部体积电流密度、电流"""
-        self.plot_csr(*arg, **kwargs)
-
-    def plot_JLP(self, *arg, **kwargs):
-        """作图：双电层效应局部体积电流密度、电流"""
-        self.plot_jLP(*arg, **kwargs)
+    plot_θ = P2Dbase.plot_c  # 作图：浓度场
+    plot_Jint_I0int_ηint = P2Dbase.plot_jint_i0int_ηint  # 作图：主反应局部体积电流密度、过电位、交换电流密度
+    plot_JDL = P2Dbase.plot_jDL          # 作图：双电层效应局部体积电流密度、电流
+    plot_θsr = P2Dbase.plot_csr          # 作图：固相颗粒径向锂离子浓度场
+    plot_JLP_ηLP = P2Dbase.plot_jLP_ηLP  # 作图：负极析锂局部体积电流密度-空间、时间
 
     def initialize_consistent(self,
             θsneg__: ndarray,
@@ -1369,7 +1264,7 @@ class LPP2D(DFNP2D):
             idxI0intneg_, idxI0intpos_,
             idxηintneg_, idxηintpos_,])
         Kinit__ = self.K__[ix_(idx_, idx_)]  # 提取K__矩阵
-        Ninit = Kinit__.shape[0]                # Kinit__矩阵的行列数
+        Ninit = Kinit__.shape[0]             # Kinit__矩阵的行列数
         start = 0
         def assign(idxOld_) -> ndarray:
             """对矩阵Kinit__重新安排索引"""
@@ -1400,7 +1295,7 @@ class LPP2D(DFNP2D):
 
         Δxneg, Δxpos, ΔxWest_, ΔxEast_, Δx_ = self.Δxneg, self.Δxpos, self.ΔxWest_, self.ΔxEast_, self.Δx_  # 读取：网格尺寸
         T = self.T  # 温度
-        F2RT = DFNP2D.F/(2*DFNP2D.R*T)
+        F2RT = P2Dbase.F/(2*P2Dbase.R*T)
         κDκT_ = self.κD*T * κ_
 
         if I0intnegUnknown := (self._I0intneg is None):
@@ -1510,7 +1405,7 @@ class LPP2D(DFNP2D):
             if abs(ΔX_).max()<1e-6:
                 break
         else:
-            raise DFNP2D.Error(f'一致性初始化失败，Newton迭代{nNewton = }次，不收敛，{abs(ΔX_).max() = }')
+            raise P2Dbase.Error(f'一致性初始化失败，Newton迭代{nNewton = }次，不收敛，{abs(ΔX_).max() = }')
 
         # 初始化状态
         self.I = I
@@ -1533,7 +1428,7 @@ class LPP2D(DFNP2D):
 
         if self.lithiumPlating:
             self.JLP_[:] = 0.
-            self.I0LP_[:] = full(Nneg, self.I0LP) if self._I0LP else LPP2D.solve_I0LP_(self.kLP, self.θeneg_)
+            self.I0LP_[:] = self.I0LP if self._I0LP else LPP2D.solve_I0LP_(self.kLP, self.θeneg_)
 
         self.Jneg_[:] = Jintneg_
         self.Jpos_[:] = Jintpos_
@@ -1572,11 +1467,11 @@ if __name__=='__main__':
     cell.plot_SOC()
     cell.plot_θ(arange(0, 2001, 200))
     cell.plot_φ(arange(0, 2001, 200))
-    cell.plot_Jint(arange(0, 2001, 200))
+    cell.plot_Jint_I0int_ηint(arange(0, 2001, 200))
     cell.plot_JDL(arange(0, 2001, 200))
     cell.plot_θsr(range(0, 2001, 200), 1)
-    cell.plot_JLP(arange(0, 2001, 200))
-    cell.plot_ηLP()
-    cell.plot_OCV()
+    cell.plot_JLP_ηLP(arange(0, 2001, 200))
+    cell.plot_LP()
+    cell.plot_OCV_OCP()
     cell.plot_dUOCPdθs()
     '''

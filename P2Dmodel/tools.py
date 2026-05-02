@@ -1,11 +1,17 @@
 #%%
+import os
 from math import log10
-from numpy import array
+from numpy import array, ndarray, zeros, unique, arange, searchsorted, clip
 
-from P2Dmodel import DFNP2D
+import matplotlib
+import matplotlib.pyplot as plt
 
-F = DFNP2D.F  # 法拉第常数 [C/mol]
-R = DFNP2D.R  # 理想气体常数 [J/(mol·K)]
+
+F = 96485.33289  # 法拉第Faraday常数 [C/mol]
+R = 8.314472     # 理想气体常数 [J/(mol·K)]
+M = 6.941e-3     # 锂的摩尔质量 [kg/mol]
+ρ = 534.         # 锂金属密度 [kg/m^3]
+
 
 class LumpedParameters:
     """23集总参数取值"""
@@ -205,7 +211,7 @@ class EnhancedLumpedParameters(LumpedParameters):
             'Kqepos': (0.5, 4),}
 
 class ConservativeLumpedParameters(LumpedParameters):
-    """保守集总参数模型（25参数，含4边界嵌锂状态，不含正负极容量Qneg、Qpos）的参数取值"""
+    """保守集总参数取值（25参数，含4边界嵌锂状态，不含正负极容量Qneg、Qpos）"""
     def __init__(self, Qnom):
         LumpedParameters.__init__(self, Qnom=Qnom)
         del self.bounds__['Qneg'], self.bounds__['Qpos']
@@ -214,6 +220,23 @@ class ConservativeLumpedParameters(LumpedParameters):
             'θmaxneg': (0.60, 0.99),    # SOC=100%的负极嵌锂状态取值范围
             'θminpos': (0.001, 0.44),   # SOC=100%的正极嵌锂状态取值范围
             'θmaxpos': (0.60, 0.99),}   # SOC=0%的正极嵌锂状态取值范围
+
+
+def set_matplotlib(fontsize: int | float = 12):
+    """设置matplotlib"""
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+    matplotlib.use('Qt5Agg')  # TkAgg/Qt5Agg
+    # plt.close(plt.figure())
+    fontname = 'Times New Roman'                  # 字体
+    plt.rcParams['font.serif'] = [fontname]       # 衬线字体
+    plt.rcParams['font.sans-serif'] = [fontname]  # 无衬线字体
+    plt.rcParams['font.size'] = fontsize          # 字号
+    plt.rcParams['mathtext.fontset'] = 'custom'
+    plt.rcParams['axes.unicode_minus'] = False               # 正常显示负号
+    plt.rcParams['mathtext.default'] = 'regular'             # 默认样式：正体、不加粗
+    plt.rcParams['mathtext.rm'] = 'STIXGeneral:regular'      # 正体、不加粗
+    plt.rcParams['mathtext.it'] = 'STIXGeneral:italic'       # 斜体、不加粗
+    plt.rcParams['mathtext.bf'] = 'STIXGeneral:italic:bold'  # 斜体、加粗
 
 
 def transform37to23(
@@ -258,6 +281,51 @@ def transform37to23(
         'l' : l,
         'SOC0': SOC0, }
 
-if __name__ == '__main__':
 
+class Interpolate1D:
+    """快速一维线性插值"""
+
+    def __init__(self, x_, y_):
+        assert len(x_) == len(y_), '自变量序列x_的长度应等于因变量序列y_的长度'
+        x_ = array(x_)
+        y_ = array(y_)
+        assert x_.ndim==1, '自变量序列x_应为1维'
+        assert y_.ndim==1, '因变量序列y_应为1维'
+        assert unique(x_).size == x_.size, '自变量序列x_不应包含相同值'
+        idx_ = x_.argsort()
+        self.x_ = x_[idx_]
+        self.y_ = y_[idx_]
+        del x_, y_, idx_
+
+    def __call__(self, x_: ndarray) -> ndarray:
+        """插值"""
+        xbase_ = self.x_
+        ybase_ = self.y_
+        # 找区间
+        idx_ = searchsorted(xbase_, x_)  # shape同x
+        # 处理边界
+        idx_ = clip(idx_, 1, xbase_.size-1)
+        idxLow_ = idx_ - 1
+        idxHigh_ = idx_
+        # 取点
+        xLow_  = xbase_[idxLow_]
+        xHigh_ = xbase_[idxHigh_]
+        yLow_  = ybase_[idxLow_]
+        yHigh_ = ybase_[idxHigh_]
+        # 插值
+        y_ = yLow_ + (x_ - xLow_) * (yHigh_ - yLow_) / (xHigh_ - xLow_)
+        return y_
+
+
+def triband_to_dense(band__: ndarray) -> ndarray:
+    """三角阵的带band__ (3, N)  -> 稠密方阵K__ (N, N)"""
+    N = band__.shape[1]
+    K__ = zeros((N, N), dtype=band__.dtype)
+    idx_ = arange(N)
+    K__[idx_, idx_] = band__[1]                # 主对角线
+    K__[idx_[:-1], idx_[1:]] = band__[0, 1:]   # 上对角线
+    K__[idx_[1:], idx_[:-1]] = band__[2, :-1]  # 下对角线
+    return K__
+
+if __name__ == '__main__':
     pass

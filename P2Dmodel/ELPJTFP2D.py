@@ -1,4 +1,5 @@
-from P2Dmodel import LPJTFP2D
+#%%
+from P2Dmodel.LPJTFP2D import LPJTFP2D
 
 
 class ELPJTFP2D(LPJTFP2D):
@@ -32,8 +33,8 @@ if __name__=='__main__':
         f_=np.logspace(4, -1, 26),
         )
 
-    cell.CC(-20, 400).EIS()
-    cell.CC(20, 400).EIS()
+    cell.CC(-10, 2000).EIS()
+    cell.CC(10, 2000).EIS()
 
     cell.count_lithium()
 
@@ -41,23 +42,23 @@ if __name__=='__main__':
     cell.plot_UI()
     cell.plot_TQgen()
     cell.plot_SOC()
-    cell.plot_c(np.arange(0, 2001, 200))
+    cell.plot_θ(np.arange(0, 2001, 200))
     cell.plot_φ(np.arange(0, 2001, 200))
-    cell.plot_jint(np.arange(0, 2001, 200))
-    cell.plot_jDL(np.arange(0, 2001, 200))
-    cell.plot_csr(np.range(0, 2001, 200), 1)
-    cell.plot_jLP(np.arange(1000, 1601, 100))
-    cell.plot_ηLP()
-    cell.plot_OCV()
+    cell.plot_Jint_I0int_ηint(np.arange(0, 2001, 200))
+    cell.plot_JDL(np.arange(0, 2001, 200))
+    cell.plot_θsr(np.arange(0, 2001, 200), 1)
+    cell.plot_JLP_ηLP(np.arange(1000, 1601, 100))
+    cell.plot_LP()
+    cell.plot_OCV_OCP()
 
     cell.plot_Z()
     cell.plot_Nyquist()
-    cell.plot_REθssurfIMEθssurf()
-    cell.plot_REθeIMθe()
-    cell.plot_REφsIMφs()
-    cell.plot_REφeIMφe()
-    cell.plot_REJintIMJint()
-    cell.plot_REJDLIMJDL()
-    cell.plot_REI0intIMI0int()
-    cell.plot_REηintIMηint()
+    cell.plot_REθssurf_IMEθssurf()
+    cell.plot_REθe_IMθe()
+    cell.plot_REφs_IMφs()
+    cell.plot_REφe_IMφe()
+    cell.plot_REJint_IMJint()
+    cell.plot_REJDL_IMJDL()
+    cell.plot_REI0int_IMI0int()
+    cell.plot_REηint_IMηint()
     '''
