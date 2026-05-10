@@ -3,18 +3,21 @@ import time, pathlib
 from math import exp
 from typing import Sequence, Callable
 from collections.abc import Iterable
+from collections import namedtuple
 from abc import ABC, abstractmethod
 
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d, RegularGridInterpolator
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import reverse_cuthill_mckee
 from scipy.linalg.lapack import dgbsv
 from scipy.optimize import root
 from numpy import ndarray, nan, \
-    array, arange, zeros, full, linspace, stack, hstack, concatenate, meshgrid, \
-    ix_, asfortranarray, isnan, isscalar, savez
+    array, arange, zeros, eye, full, linspace, stack, hstack, concatenate, meshgrid, \
+    cbrt, ix_, asfortranarray, isnan, isscalar, savez
 
 from P2Dmodel.OCP import NMC111, Graphite
-from P2Dmodel.tools import Interpolate1D, set_matplotlib, F, R
+from P2Dmodel.tools import Interpolate1D, set_matplotlib, DiagonalSliceRavel, F, R
 
 
 class P2Dbase(ABC):
@@ -24,23 +27,63 @@ class P2Dbase(ABC):
     F = F  # 法拉第Faraday常数 [C/mol]
     R = R  # 理想气体常数 [J/(mol·K)]
 
-    ## 类型注解 ##
+    __slots__ = (
+        # P2D模型通用参数名
+        'θminneg', 'θmaxneg', 'θminpos', 'θmaxpos',
+        'UOCPneg', 'UOCPpos', 'solve_dUOCPdθsneg_', 'solve_dUOCPdθspos_',
+        'dUOCPdTneg', 'dUOCPdTpos',
+        '_kneg', '_kpos', '_kLP', '_Dsneg', '_Dspos',
+        'σneg', 'σpos', 'RSEIneg', 'RSEIpos',
+        'CDLneg', 'CDLpos', 'l',
+        '_i0intneg', '_i0intpos', '_i0LP',
+        # 网格参数
+        'Δt', 'Nneg', 'Nsep', 'Npos', 'Ne', 'Nr',
+        'x_', 'Δx_', 'ΔxWest_', 'ΔxEast_', 'Δxneg', 'Δxpos',
+        'rneg_', 'rpos_', 'Δrneg_', 'Δrpos_', 'Vr_',
+        # 热参数
+        'EDsneg', 'EDspos', 'Ekneg', 'Ekpos', 'Eκ', 'EDe', 'EkLP',
+        'Tref', 'hA', 'Cth', 'Tamb',
+        # 模式
+        'lithiumPlating', 'doubleLayerEffect',
+        'timeDiscretization', 'radialDiscretization',
+        'decouple_cs', 'constants', 'complete', 'verbose',
+        # 状态量
+        'T', 'I', 't', 'QLP',
+        'φsneg_', 'φspos_', 'φe_',
+        'ηintneg_', 'ηintpos_', 'ηLPneg_', 'ηLPpos_',
+        'nNewton',
+        'bK_', 'ravelK_',
+        'data',
+        # 恒定量
+        'datanames_', 'banded_experience_of_J__',
+        'bandKcsneg__', 'bandKcspos__',
+        'e__', 'coeffsExpl_', 'sK',
+        'coeffs_csneg_', 'coeffs_cspos_',
+        'coeff_csnegsurf_csnegsurf',
+        'coeff_cspossurf_cspossurf',
+        # 作图恒定量
+        'tSign', 'tUnit',
+        'xSign', 'xUnit', 'rSign', 'rUnit',
+        'cSign', 'cUnit', 'jSign', 'jUnit', 'i0Sign', 'i0Unit',
+        )
+
+
+    # 类型注解 ##
+    Qcell: float; Qneg: float; Qpos: float  # 理论可用容量、负极、正极容量 [Ah]
     _kneg: float; _kpos: float    # 负极、正极主反应速率常数
     _kLP: float                   # 负极析锂反应速率常数
     _Dsneg: float; _Dspos: float  # 负极、正极固相扩散系数
-    CDLneg: float; CDLpos: float  # 负极、正极双电层电容
     _i0intneg: float | None       # 负极交换电流密度
     _i0intpos: float | None       # 正极交换电流密度
-    data: dict[str, list[float | ndarray]]  # 数据记录字典
-    K__: ndarray       # (N, N) 因变量线性矩阵
-    x_: ndarray        # (Ne,) 电极厚度方向控制体中心坐标
-    Δx_: ndarray       # (Ne,) 电极厚度方向控制体厚度序列
-    ΔxWest_: ndarray   # (Ne,) 当前控制体中心到左侧控制体中心的距离
-    ΔxEast_: ndarray   # (Ne,) 当前控制体中心到右侧控制体中心的距离
 
     def __init__(self,
-            T0: float = 298.15,  # 初始温度 [K]
-            SOC0: float = 0.2,   # 初始荷电状态 [–]
+            Lneg: float = 1.,
+            Lsep: float = 1.,
+            Lpos: float = 1.,   # 负极、隔膜、正极厚度 [m]/[–]
+            Rsneg: float = 1.,
+            Rspos: float = 1.,  # 负极、正极固相颗粒半径 [m]/[–]
+            T0: float = 298.15,         # 初始温度 [K]
+            SOC0: float = 0.2,          # 初始荷电状态 [–]
             θminneg: float = .0370744,  # SOC=0%的负极嵌锂状态 [–]
             θmaxneg: float = .8775600,  # SOC=100%的负极嵌锂状态 [–]
             θminpos: float = .0746557,  # SOC=100%的正极嵌锂状态 [–]
@@ -52,10 +95,10 @@ class P2Dbase(ABC):
             Nr: int = 10,               # 球形固相颗粒径向网格数
             UOCPneg: Callable = Graphite().Graphite_COMSOL,  # 函数：输入负极嵌锂状态θsneg_ [–]，输出负极开路电位UOCPneg_ [V]
             UOCPpos: Callable = NMC111().NMC111_COMSOL,      # 函数：输入正极嵌锂状态θspos_ [–]，输出正极开路电位UOCPpos_ [V]
-            dUOCPdTneg: Callable | float = 0.,    # 函数：输入负极嵌锂状态θsneg_ [–]，输出负极开路电位的熵热系数 [V/K]
-            dUOCPdTpos: Callable | float = 0.,    # 函数：输入正极嵌锂状态θspos_ [–]，输出正极开路电位的熵热系数 [V/K]
             dUOCPdθsneg: Callable | None = None,  # 函数：输入负极嵌锂状态θsneg_ [–]，输出负极开路电位对嵌锂状态的导数 [V/–]
             dUOCPdθspos: Callable | None = None,  # 函数：输入正极嵌锂状态θspos_ [–]，输出正极开路电位对嵌锂状态的导数 [V/–]
+            dUOCPdTneg: Callable | float = 0.,    # 函数：输入负极嵌锂状态θsneg_ [–]，输出负极开路电位的熵热系数 [V/K]
+            dUOCPdTpos: Callable | float = 0.,    # 函数：输入正极嵌锂状态θspos_ [–]，输出正极开路电位的熵热系数 [V/K]
             EDsneg: float = 30e3,  # 负极锂离子扩散系数的比活化能 [J/mol]
             EDspos: float = 30e3,  # 正极锂离子扩散系数的比活化能 [J/mol]
             Ekneg: float = 68e3,   # 负极主反应速率常数的比活化能 [J/mol]
@@ -91,17 +134,17 @@ class P2Dbase(ABC):
         self.Nneg = Nneg; assert isinstance(Nneg, int) and Nneg>=3, f'负极区域网格数{Nneg = }，应为不小于3的正整数'
         self.Nsep = Nsep; assert isinstance(Nsep, int) and Nsep>=3, f'隔膜区域网格数{Nsep = }，应为不小于3的正整数'
         self.Npos = Npos; assert isinstance(Npos, int) and Npos>=3, f'正极区域网格数{Npos = }，应为不小于3的正整数'
-        self.Nr = Nr; assert isinstance(Nr, int) and Nr>=3, f'球形固相颗粒半径方向网格数{Nr = }，应为不小于3的正整数'
+        self.Nr = Nr;     assert isinstance(Nr, int) and Nr>=3, f'球形固相颗粒半径方向网格数{Nr = }，应为不小于3的正整数'
         self.Ne = Ne = Nneg + Nsep + Npos  # 电解液网格总数
         # 函数
         self.UOCPneg = UOCPneg; assert callable(UOCPneg), '函数UOCPneg，输入负极嵌锂状态θsneg_ [–]，输出正极开路电位UOCPneg_ [V]'
         self.UOCPpos = UOCPpos; assert callable(UOCPpos), '函数UOCPpos，输入正极嵌锂状态θspos_ [–]，输出负极开路电位UOCPpos_ [V]'
-        self.dUOCPdTneg = dUOCPdTneg; assert callable(dUOCPdTneg) or isinstance(dUOCPdTneg, (int, float)), '负极开路电位的熵热系数dUOCPdTneg [V/K]，标量或函数（输入负极嵌锂状态θsneg_ [–]）'
-        self.dUOCPdTpos = dUOCPdTpos; assert callable(dUOCPdTpos) or isinstance(dUOCPdTpos, (int, float)), '正极开路电位的熵热系数dUOCPdTpos [V/K]，标量或函数（输入正极嵌锂状态θspos_ [–]）'
         assert callable(dUOCPdθsneg) or (dUOCPdθsneg is None), '负极开路电位对嵌锂状态的导数 [V/–]，None或函数（输入负极嵌锂状态θsneg_ [–]）'
         self.solve_dUOCPdθsneg_ = P2Dbase.generate_solve_dUOCPdθs_(UOCPneg) if (dUOCPdθsneg is None) else dUOCPdθsneg
         assert callable(dUOCPdθspos) or (dUOCPdθspos is None), '正极开路电位对嵌锂状态的导数 [V/–]，None或函数（输入正极嵌锂状态θspos_ [–]）'
         self.solve_dUOCPdθspos_ = P2Dbase.generate_solve_dUOCPdθs_(UOCPpos) if (dUOCPdθspos is None) else dUOCPdθspos
+        self.dUOCPdTneg = dUOCPdTneg; assert callable(dUOCPdTneg) or isinstance(dUOCPdTneg, (int, float)), '负极开路电位的熵热系数dUOCPdTneg [V/K]，标量或函数（输入负极嵌锂状态θsneg_ [–]）'
+        self.dUOCPdTpos = dUOCPdTpos; assert callable(dUOCPdTpos) or isinstance(dUOCPdTpos, (int, float)), '正极开路电位的熵热系数dUOCPdTpos [V/K]，标量或函数（输入正极嵌锂状态θspos_ [–]）'
         # 比活化能
         self.EDsneg = EDsneg; assert EDsneg>=0, f'负极锂离子扩散系数的比活化能{EDsneg = }，应大于或等于0 [J/mol]'
         self.EDspos = EDspos; assert EDspos>=0, f'正极锂离子扩散系数的比活化能{EDspos = }，应大于或等于0 [J/mol]'
@@ -124,8 +167,8 @@ class P2Dbase(ABC):
         self.constants = constants      # 是否使用常量参数缓存
         self.complete = complete        # 是否确保功能完备
         self.verbose = verbose          # 是否显示初始化、运行进度
-        # 状态量
-        self.T = T0  # 温度
+        # P2D通用状态量
+        self.T = T0    # 温度
         self.I = 0.    # 电流 [A]
         self.t = 0.    # 时刻 [s]
         self.QLP = 0.  # 累计析锂量 [Ah]
@@ -133,275 +176,579 @@ class P2Dbase(ABC):
         θspos = θmaxpos + SOC0*(θminpos - θmaxpos)  # 初始正极嵌锂状态
         self.φsneg_ = full(Nneg, UOCPneg := self.solve_UOCPneg_(θsneg))  # 初始化：负极固相电势场 [V]
         self.φspos_ = full(Npos, UOCPpos := self.solve_UOCPpos_(θspos))  # 初始化：正极固相电势场 [V]
-        self.φe_ = zeros(Ne)                                                   # 初始化：电解液电势场 [V]
-        self.ηintneg_, self.ηintpos_ = zeros(Nneg), zeros(Npos)                # 初始化：负极、正极主反应过电位场 [V]
-        self.ηLPneg_, self.ηLPpos_ = full(Nneg, UOCPneg), full(Npos, UOCPpos)  # 初始化：负极、正极析锂反应过电位场 [V]
-        self.datanames_ = [         # 需记录的数据名称
-            'U', 'I', 't',          # 端电压 [V]、电流 [A]、时刻 [s]
-            'ηLPneg_', 'ηLPpos_',]  # 负极、正极表面析锂反应过电位场 [V]
-        self.bandwidthsJ_: dict[str, int] = None  # Jacobi矩阵带宽
-        self.idxJreordered_: ndarray = None       # 索引：重排Jacobi矩阵
-        self.idxJrecovered_: ndarray = None       # 索引：恢复排序Jacobi矩阵
+        self.φe_ = zeros(Ne)                # 初始化：电解液电势场 [V]
+        self.ηintneg_ = zeros(Nneg)
+        self.ηintpos_ = zeros(Npos)         # 初始化：负极、正极主反应过电位场 [V]
+        self.ηLPneg_ = full(Nneg, UOCPneg)
+        self.ηLPpos_ = full(Npos, UOCPpos)  # 初始化：负极、正极析锂反应过电位场 [V]
+        self.nNewton = 0
         # 恒定量
+        self.banded_experience_of_J__ = None  # Jacobi矩阵带状化经验
+        self.Δxneg = Δxneg = Lneg/Nneg  # 负极网格厚度
+        Δxsep      = Lsep/Nsep          # 隔膜网格厚度
+        self.Δxpos = Δxpos = Lpos/Npos  # 正极网格厚度
+        self.x_ = concatenate([
+            linspace(0, Lneg, Nneg + 1)[:-1] + Δxneg*0.5,
+            linspace(Lneg, Lneg + Lsep, Nsep + 1)[:-1] + Δxsep*0.5,
+            linspace(Lneg + Lsep, Lneg + Lsep + Lpos, Npos + 1)[:-1] + Δxpos*0.5,])   # (Ne,) 全区域各控制体中心坐标
+        self.Δx_ = concatenate([full(Nneg, Δxneg), full(Nsep, Δxsep), full(Npos, Δxpos)])  # (Ne,) 全区域控制体厚度
+        self.ΔxWest_ = hstack([
+            full(Nneg, Δxneg),
+            (Δxneg + Δxsep)*0.5, full(Nsep - 1, Δxsep),
+            (Δxsep + Δxpos)*0.5, full(Npos - 1, Δxpos)])  # (Ne,) 当前控制体中心到左侧控制体中心的距离
+        self.ΔxEast_ = hstack([
+            full(Nneg - 1, Δxneg), (Δxneg + Δxsep)*0.5,
+            full(Nsep - 1, Δxsep), (Δxsep + Δxpos)*0.5,
+            full(Npos, Δxpos)])  # (Ne,) 当前控制体中心到右侧控制体中心的距离
+
+        (self.rneg_,        # (Nr,) 负极球壳控制体中心坐标 [m]/[-]
+         self.Δrneg_,       # (Nr,) 负极球壳控制体厚度 [m]/[-]
+         self.Vr_,          # 从中心到表面球壳体积分数序列 [-]
+         self.bandKcsneg__, # (3, Nr) 负极固相浓度三对角矩阵的带 [m^-2]/[–]
+         ) = P2Dbase.generate_r_Δr_bandKcs__(Nr, Rsneg, radialDiscretization)
+        if Rsneg==Rspos:
+            self.rpos_ = self.rneg_
+            self.Δrpos_ = self.Δrneg_
+            self.bandKcspos__ = self.bandKcsneg__
+        else:
+            (self.rpos_,
+             self.Δrpos_, _,
+             self.bandKcspos__,
+             ) = P2Dbase.generate_r_Δr_bandKcs__(Nr, Rspos, radialDiscretization)
+        rneg_ = self.rneg_
+        r_3, r_2, r_1 = rneg_[-3:]
+        Δr_3, Δr_2, Δr_1 = Δrneg_3_1_ = Rsneg - rneg_[-3:]
+        self.coeffsExpl_ = coeffsExpl_ = array([
+            Δr_1*Δr_2/((r_3 - r_1)*(r_3 - r_2)),
+            Δr_1*Δr_3/((r_2 - r_1)*(r_2 - r_3)),
+            Δr_2*Δr_3/((r_1 - r_2)*(r_1 - r_3))
+            ])  # (3,) 用于由3个颗粒内部节点浓度外推表面浓度的无量纲系数 [–]，计算结果不依赖正负极，仅取决于Nr和radialDiscretization
+
         if decouple_cs:
             self.e__ = zeros((Nr, 1))  # (Nr, 1) 非零末元为1的向量
-            self.e__[-1] = 1.
+            self.e__[-1] = 1
+        else:
+            self.coeffs_csneg_ = coeffs_csneg_ = coeffsExpl_/-Δrneg_3_1_  # (3,) [1/m]/[–]
+            self.coeff_csnegsurf_csnegsurf = coeff_csnegsurf_csnegsurf = (1/Δrneg_3_1_).sum()
+            self.coeffs_cspos_ = coeffs_csneg_
+            if Rsneg==Rspos:
+                self.coeffs_cspos_ = coeffs_csneg_
+                self.coeff_cspossurf_cspossurf = coeff_csnegsurf_csnegsurf
+            else:
+                Δrpos_3_1_ = Rspos - self.rpos_[-3:]
+                self.coeffs_cspos_ = coeffsExpl_/-Δrpos_3_1_  # (3,) [1/m]/[–]
+                self.coeff_cspossurf_cspossurf = (1/Δrpos_3_1_).sum()
+
+        # 需保存状态量的名称
+        self.datanames_ = [
+            't', 'I', 'U',  # 时刻 [s] 电流 [A] 端电压 [V]
+            'ηLPneg_', 'ηLPpos_', ]  # 负极、正极析锂反应过电位场 [V]
         if complete:
-            # matplotlib作图设置
-            set_matplotlib()
+            self.datanames_.extend([
+                'φsneg_', 'φspos_', 'φe_',  # 负极、正极固相电势场 [V]、电解液电势场 [V]
+                'ηintneg_', 'ηintpos_',  # 负极、正极主反应过电位场 [V]
+                'θsneg', 'θspos', 'SOC',  # 负极、正极嵌锂状态、全电池荷电状态 [–]
+                'T', 'Qgen',  # 温度 [K]、产热量 [W]
+                'nNewton', ])  # Newton迭代次数
+            set_matplotlib()  # matplotlib作图设置
             # matplotlib作图变量单位
-            self.tSign, self.tUnit = r'${\it t}$', 's'           # 时间t符号、单位
+            self.tSign, self.tUnit = r'${\it t}$', 's'            # 时间t符号、单位
             self.xSign, self.xUnit = r'${\it x}$', 'μm'           # 电极厚度方向坐标x符号、单位
             self.rSign, self.rUnit = r'${\it r}$', 'μm'           # 径向坐标r符号、单位
             self.cSign, self.cUnit = r'${\it c}$', 'mol/m$^3$'    # 锂离子浓度c符号、单位
             self.jSign, self.jUnit = r'${\it j}$', 'A/m$^3$'      # 局部体积电流密度j符号、单位
             self.i0Sign, self.i0Unit = r'${\it i}_0$', 'A/m$^2$'  # 交换电流密度i0符号、单位
+        self.data = {name: [] for name in self.datanames_}  # 字典：存储呈时间序列的运行数据
+        # 因变量线性矩阵K__
+        self.ravelK_ = None  # (NK*NK,) 因变量线性矩阵K__展平视图
+        self.bK_ = None      # (NK,) 常数项向量 K__ @ X_ = bK_
+        self.sK = None       # 切片索引集
 
-    # 因变量索引
-    idxcsneg_: ndarray; idxcspos_: ndarray
-    idxcsnegsurf_: ndarray; idxcspossurf_: ndarray
-    idxce_: ndarray
-    idxφsneg_: ndarray; idxφspos_: ndarray
-    idxφe_: ndarray
-    idxjintneg_: ndarray; idxjintpos_: ndarray
-    idxjDLneg_: ndarray; idxjDLpos_: ndarray
-    idxi0intneg_: ndarray; idxi0intpos_: ndarray
-    idxηintneg_: ndarray; idxηintpos_: ndarray
-    idxjLP_: ndarray; idxηLP_: ndarray
-    idxc_: ndarray; idxφ_: ndarray; idxj_: ndarray
-
-    def generate_indices_of_dependent_variables(self,):
-        """生成矩阵K__的因变量索引"""
+    def _generate_K__bK_and_slices(self):
+        """生成时域因变量矩阵K__、常数项向量bK_及切片索引，并对K__赋常系数、几何网格相关参数"""
+        # 读取网格数
         Nneg, Npos, Ne, Nr = self.Nneg, self.Npos, self.Ne, self.Nr
-        decouple_cs, lithiumPlating = self.decouple_cs, self.lithiumPlating
-        N = 0  # 全局索引游标
-        def allocate(n):
-            # 分配索引
-            nonlocal N
-            idx_ = arange(N, N + n)
-            N += n
-            return idx_
-        self.idxcsneg_ = idxcsneg_ = allocate(0 if decouple_cs else Nr*Nneg)  # 索引：负极固相内部浓度 先排颗粒径向r，再排x方向
-        self.idxcspos_ = idxcspos_ = allocate(0 if decouple_cs else Nr*Npos)  # 索引：正极固相内部浓度
-        self.idxcsnegsurf_ = idxcsnegsurf_ = allocate(Nneg)  # 索引：正极固相表面浓度
-        self.idxcspossurf_ = idxcspossurf_ = allocate(Npos)  # 索引：正极固相表面浓度
-        self.idxce_ = idxce_ = allocate(Ne)  # 索引：电解液浓度
-        self.idxφsneg_ = idxφsneg_ = allocate(Nneg)  # 索引：负极固相电势
-        self.idxφspos_ = idxφspos_ = allocate(Npos)  # 索引：正极固相电势
-        self.idxφe_ = idxφe_ = allocate(Ne)  # 索引：电解液电势
-        self.idxjintneg_ = idxjintneg_ = allocate(Nneg)  # 索引：负极主反应局部体积电流密度
-        self.idxjintpos_ = idxjintpos_ = allocate(Npos)  # 索引：正极主反应局部体积电流密度
-        self.idxjDLneg_ = idxjDLneg_ = allocate(Nneg if self.CDLneg else 0)  # 索引：负极双电层局部体积电流密度
-        self.idxjDLpos_ = idxjDLpos_ = allocate(Npos if self.CDLpos else 0)  # 索引：正极双电层局部体积电流密度
-        self.idxi0intneg_ = allocate(0 if self._i0intneg else Nneg)  # 索引：负极主反应交换电流密度
-        self.idxi0intpos_ = allocate(0 if self._i0intpos else Npos)  # 索引：正极主反应交换电流密度
-        self.idxηintneg_ = idxηintneg_ = allocate(Nneg)  # 索引：负极主反应过电位
-        self.idxηintpos_ = idxηintpos_ = allocate(Npos)  # 索引：正极主反应过电位
-        self.idxjLP_ = idxjLP_ = allocate(Nneg if lithiumPlating else 0)  # 索引：负极析锂反应局部体积电流密度
-        self.idxηLP_ = idxηLP_ = allocate(Nneg if lithiumPlating else 0)  # 索引：负极析锂反应过电位
-        self.idxc_ = concatenate([idxcsneg_, idxcspos_, idxcsnegsurf_, idxcspossurf_, idxce_])       # 索引：所有浓度量
-        self.idxφ_ = concatenate([idxφsneg_, idxφspos_, idxφe_, idxηintneg_, idxηintpos_, idxηLP_])  # 索引：所有电势量
-        self.idxj_ = concatenate([idxjintneg_, idxjintpos_, idxjDLneg_, idxjDLpos_, idxjLP_])        # 索引：所有局部体积电流量
-        return N
+        # 读取模式
+        lithiumPlating = self.lithiumPlating
+        doubleLayerEffect = self.doubleLayerEffect
+        decouple_cs = self.decouple_cs
 
-    def assign_K__with_constants(self):
-        # 对K__矩阵赋恒定值
-        Nneg, Npos = self.Nneg, self.Npos
-        Δxneg, Δxpos = self.Δxneg, self.Δxpos
-        K__ = self.K__
-        # 负极固相电势φsneg行φsneg列
-        idxφsneg_ = self.idxφsneg_
-        K__[idxφsneg_[1:], idxφsneg_[:-1]] = 1  # φsneg列下对角线
-        K__[idxφsneg_[:-1], idxφsneg_[1:]] = 1  # φsneg列上对角线
-        K__[idxφsneg_, idxφsneg_] = [-1] + [-2]*(Nneg - 2) + [-1]  # φsneg列主对角线
-        # 正极固相电势φspos行φspos列
-        idxφspos_ = self.idxφspos_
-        K__[idxφspos_[1:], idxφspos_[:-1]] = 1  # φspos列下对角线
-        K__[idxφspos_[:-1], idxφspos_[1:]] = 1  # φspos列上对角线
-        K__[idxφspos_, idxφspos_] = [-1] + [-2]*(Npos - 2) + [-1]  # φspos列主对角线
+        NK = 0  # 全局索引游标
+        def allocate(n: int) -> slice:
+            # 分配切片
+            nonlocal NK
+            s = slice(NK, NK + n)
+            NK += n
+            return s
+        slices_ = {
+            's_csneg': (s_csneg := allocate(0 if decouple_cs else Nr*Nneg)),  # 索引：负极固相内部浓度 先排颗粒径向r，再排厚度方向x
+            's_cspos': (s_cspos := allocate(0 if decouple_cs else Nr*Npos)),  # 索引：正极固相内部浓度
+            's_csnegsurf': (s_csnegsurf := allocate(Nneg)),  # 索引：正极固相表面浓度
+            's_cspossurf': (s_cspossurf := allocate(Npos)),  # 索引：正极固相表面浓度
+            's_ce':     (s_ce :=  allocate(Ne)),             # 索引：电解液浓度
+            's_φsneg':  (s_φsneg := allocate(Nneg)),         # 索引：负极固相电势
+            's_φspos':  (s_φspos := allocate(Npos)),         # 索引：正极固相电势
+            's_φe':     (s_φe := allocate(Ne)),              # 索引：电解液电势
+            's_jintneg': (s_jintneg := allocate(Nneg)),      # 索引：负极主反应局部体积电流密度
+            's_jintpos': (s_jintpos := allocate(Npos)),      # 索引：正极主反应局部体积电流密度
+            's_jDLneg':  (s_jDLneg := allocate(Nneg if doubleLayerEffect else 0)),  # 索引：负极双电层局部体积电流密度
+            's_jDLpos':  (s_jDLpos := allocate(Npos if doubleLayerEffect else 0)),  # 索引：正极双电层局部体积电流密度
+            's_i0intneg': (s_i0intneg := allocate(0 if self._i0intneg else Nneg)),  # 索引：负极主反应交换电流密度
+            's_i0intpos': (s_i0intpos := allocate(0 if self._i0intpos else Npos)),  # 索引：正极主反应交换电流密度
+            's_ηintneg':  (s_ηintneg := allocate(Nneg)),  # 索引：负极主反应过电位
+            's_ηintpos':  (s_ηintpos := allocate(Npos)),  # 索引：正极主反应过电位
+            }
+        if lithiumPlating:
+            slices_.update({
+                's_jLP': (s_jLP := allocate(Nneg)),  # 索引：负极析锂反应局部体积电流密度
+                's_ηLP': (s_ηLP := allocate(Nneg)),  # 索引：负极析锂反应过电位
+                })
+        slices_.update({
+            's_ceneg': (s_ceneg := slice(start := s_ce.start, start + Nneg)),  # 索引：负极电解液浓度
+            's_cepos': (s_cepos := slice((stop := s_ce.stop) - Npos, stop)),   # 索引：正极电解液浓度
+            's_φeneg': (s_φeneg := slice(start := s_φe.start, start + Nneg)),  # 索引：负极电解液电势
+            's_φepos': (s_φepos := slice((stop := s_φe.stop) - Npos, stop)),   # 索引：正极电解液电势
+            's_c': slice(0, s_ce.stop),                    # 索引：所有浓度量
+            's_φ': slice(s_φsneg.start, s_φe.stop),        # 索引：所有电势量
+            's_j': slice(s_jintneg.start, s_jDLpos.stop),  # 索引：主要局部体积电流密度量
+            })
+
+        # K__矩阵子块对角元对应K__.ravel()的索引
+        dsr = DiagonalSliceRavel(NK)
+        if decouple_cs:
+            pass
+        else:
+            step = NK*Nr + 1
+            startneg = (s_csneg.start + Nr - 1) * NK + s_jintneg.start
+            stopneg = startneg + Nneg*step
+            startpos = (s_cspos.start + Nr - 1) * NK + s_jintpos.start
+            stoppos = startpos + Npos*step
+            slices_.update({
+                'sr_csneg_csneg'   : dsr(s_csneg, s_csneg),
+                'sr_csneg_csneg_l' : dsr(s_csneg, s_csneg, -1),
+                'sr_csneg_csneg_u' : dsr(s_csneg, s_csneg,  1),
+                'sr_cspos_cspos'   : dsr(s_cspos, s_cspos),
+                'sr_cspos_cspos_l' : dsr(s_cspos, s_cspos, -1),
+                'sr_cspos_cspos_u' : dsr(s_cspos, s_cspos,  1),
+                'sr_csnegEnd_jintneg' : slice(startneg, stopneg, step),
+                'sr_csposEnd_jintpos' : slice(startpos, stoppos, step),
+                })
+        slices_.update({
+            'sr_csnegsurf_jintneg' : dsr(s_csnegsurf, s_jintneg),
+            'sr_cspossurf_jintpos' : dsr(s_cspossurf, s_jintpos),
+            'sr_ce_ce'   : dsr(s_ce, s_ce),
+            'sr_ce_ce_l' : dsr(s_ce, s_ce, -1),
+            'sr_ce_ce_u' : dsr(s_ce, s_ce,  1),
+            'sr_ceneg_jintneg' : dsr(s_ceneg, s_jintneg),
+            'sr_ceneg_jDLneg'  : dsr(s_ceneg, s_jDLneg),
+            'sr_cepos_jintpos' : dsr(s_cepos, s_jintpos),
+            'sr_cepos_jDLpos'  : dsr(s_cepos, s_jDLpos),
+            'sr_φsneg_jintneg' : dsr(s_φsneg, s_jintneg),
+            'sr_φsneg_jDLneg'  : dsr(s_φsneg, s_jDLneg),
+            'sr_φspos_jintpos' : dsr(s_φspos, s_jintpos),
+            'sr_φspos_jDLpos'  : dsr(s_φspos, s_jDLpos),
+            'sr_φe_ce'   : dsr(s_φe, s_ce),
+            'sr_φe_ce_l' : dsr(s_φe, s_ce, -1),
+            'sr_φe_ce_u' : dsr(s_φe, s_ce,  1),
+            'sr_φe_φe'   : dsr(s_φe, s_φe),
+            'sr_φe_φe_l' : dsr(s_φe, s_φe, -1),
+            'sr_φe_φe_u' : dsr(s_φe, s_φe,  1),
+            'sr_jintneg_i0intneg' : dsr(s_jintneg, s_i0intneg),
+            'sr_jintneg_ηintneg'  : dsr(s_jintneg, s_ηintneg),
+            'sr_jintpos_i0intpos' : dsr(s_jintpos, s_i0intpos),
+            'sr_jintpos_ηintpos'  : dsr(s_jintpos, s_ηintpos),
+            'sr_jDLneg_φsneg'   : dsr(s_jDLneg, s_φsneg),
+            'sr_jDLneg_φeneg'   : dsr(s_jDLneg, s_φeneg),
+            'sr_jDLneg_jintneg' : dsr(s_jDLneg, s_jintneg),
+            'sr_jDLneg_jDLneg'  : dsr(s_jDLneg, s_jDLneg),
+            'sr_jDLpos_φspos'   : dsr(s_jDLpos, s_φspos),
+            'sr_jDLpos_φepos'   : dsr(s_jDLpos, s_φepos),
+            'sr_jDLpos_jintpos' : dsr(s_jDLpos, s_jintpos),
+            'sr_jDLpos_jDLpos'  : dsr(s_jDLpos, s_jDLpos),
+            'sr_i0intneg_csnegsurf' : dsr(s_i0intneg, s_csnegsurf),
+            'sr_i0intneg_ceneg'     : dsr(s_i0intneg, s_ceneg),
+            'sr_i0intpos_cspossurf' : dsr(s_i0intpos, s_cspossurf),
+            'sr_i0intpos_cepos'     : dsr(s_i0intpos, s_cepos),
+            'sr_ηintneg_csnegsurf' : dsr(s_ηintneg, s_csnegsurf),
+            'sr_ηintneg_jintneg'   : dsr(s_ηintneg, s_jintneg),
+            'sr_ηintneg_jDLneg'    : dsr(s_ηintneg, s_jDLneg),
+            'sr_ηintpos_cspossurf' : dsr(s_ηintpos, s_cspossurf),
+            'sr_ηintpos_jintpos'   : dsr(s_ηintpos, s_jintpos),
+            'sr_ηintpos_jDLpos'    : dsr(s_ηintpos, s_jDLpos),
+            })
+        if lithiumPlating:
+            slices_.update({
+                'sr_ceneg_jLP'   : dsr(s_ceneg, s_jLP),
+                'sr_φsneg_jLP'   : dsr(s_φsneg, s_jLP),
+                'sr_jDLneg_jLP'  : dsr(s_jDLneg, s_jLP),
+                'sr_ηintneg_jLP' : dsr(s_ηintneg, s_jLP),
+                'sr_jLP_ceneg'   : dsr(s_jLP, s_ceneg),
+                'sr_jLP_ηLP'     : dsr(s_jLP, s_ηLP),
+                'sr_ηLP_jintneg' : dsr(s_ηLP, s_jintneg),
+                'sr_ηLP_jDLneg'  : dsr(s_ηLP, s_jDLneg),
+                'sr_ηLP_jLP'     : dsr(s_ηLP, s_jLP),
+                })
+        self.sK = namedtuple('SlicesK', slices_.keys())(**slices_)
+        del slices_
+        self.ravelK_ = ravelK_ = eye(NK).ravel()  # (NK*NK,) 因变量线性矩阵K__展平视图
+        self.bK_ = zeros(NK)                      # (NK,) 常数项向量 K__ @ X_ = bK_
+
+        # 对K__矩阵赋恒定值（几何参数、常系数）
+
+        # 负极、正极固相表面浓度cssurf行（此处为几何参数Rsneg、Rspos相关，据其物理意义，Rsneg、Rspos在电池运行过程中不应变化）
+        if decouple_cs:
+            pass
+        else:
+            step = NK + Nr
+            start0neg = s_csnegsurf.start * NK + s_csneg.start + Nr
+            start0pos = s_cspossurf.start * NK + s_cspos.start + Nr
+            stepNneg = step*Nneg
+            stepNpos = step*Npos
+            c_ = self.coeffs_csneg_
+            ravelK_[slice(start := start0neg - 3, start + stepNneg, step)] = c_[-3]
+            ravelK_[slice(start := start0neg - 2, start + stepNneg, step)] = c_[-2]
+            ravelK_[slice(start := start0neg - 1, start + stepNneg, step)] = c_[-1]
+            ravelK_[dsr(s_csnegsurf, s_csnegsurf)] = self.coeff_csnegsurf_csnegsurf
+            c_ = self.coeffs_cspos_
+            ravelK_[slice(start := start0pos - 3, start + stepNpos, step)] = c_[-3]
+            ravelK_[slice(start := start0pos - 2, start + stepNpos, step)] = c_[-2]
+            ravelK_[slice(start := start0pos - 1, start + stepNpos, step)] = c_[-1]
+            ravelK_[dsr(s_cspossurf, s_cspossurf)] = self.coeff_cspossurf_cspossurf
+
+        # 负极、正极固相电势φs行φs列
+        for s_φs, Nreg in zip((s_φsneg, s_φspos), (Nneg, Npos)):
+            ravelK_[dsr(s_φs, s_φs)] = [-1] + [-2]*(Nreg - 2) + [-1]  # 主对角线
+            ravelK_[dsr(s_φs, s_φs, -1)] = \
+            ravelK_[dsr(s_φs, s_φs,  1)] = 1  # 上下对角线
+
         # 电解液电势φe行j列
-        idxφe_ = self.idxφe_
-        idxφeneg_, idxφepos_ = idxφe_[:Nneg], idxφe_[-Npos:]
-        K__[idxφeneg_, self.idxjintneg_] = Δxneg  # jintneg列
-        K__[idxφepos_, self.idxjintpos_] = Δxpos  # jintpos列
-        if self.idxjDLneg_.size:
-            K__[idxφeneg_, self.idxjDLneg_] = Δxneg  # jDLneg列
-        if self.idxjDLpos_.size:
-            K__[idxφepos_, self.idxjDLpos_] = Δxpos  # jDLpos列
-        # 负极、正极主反应局部体积电流密度jint行jint列
-        idxjint_ = concatenate([self.idxjintneg_, self.idxjintpos_])
-        K__[idxjint_, idxjint_] = 1
-        # 负极、正极主反应交换电流密度i0int行i0int列
-        idxi0int_ = concatenate([self.idxi0intneg_, self.idxi0intpos_])
-        K__[idxi0int_, idxi0int_] = 1
+        ravelK_[dsr(s_φeneg, s_jintneg)] = Δxneg = self.Δxneg  # jintneg列
+        ravelK_[dsr(s_φepos, s_jintpos)] = Δxpos = self.Δxpos  # jintpos列
+        if doubleLayerEffect:
+            ravelK_[dsr(s_φeneg, s_jDLneg)] = Δxneg  # jDLneg列
+            ravelK_[dsr(s_φepos, s_jDLpos)] = Δxpos  # jDLpos列
+
         # 负极、正极主反应过电位ηint行
-        idxηintneg_, idxηintpos_ = self.idxηintneg_, self.idxηintpos_
-        idxηint_ = concatenate([idxηintneg_, idxηintpos_])
-        K__[idxηint_, idxηint_] = 1  # ηint列
-        K__[idxηintneg_, idxφeneg_] = \
-        K__[idxηintpos_, idxφepos_] = 1  # φe列
-        K__[idxηintneg_, idxφsneg_] = \
-        K__[idxηintpos_, idxφspos_] = -1  # φs列
+        ravelK_[dsr(s_ηintneg, s_φeneg)] = \
+        ravelK_[dsr(s_ηintpos, s_φepos)] = 1   # φe列
+        ravelK_[dsr(s_ηintneg, s_φsneg)] = \
+        ravelK_[dsr(s_ηintpos, s_φspos)] = -1  # φs列
+
         # 析锂补充
+        if lithiumPlating:
+            ravelK_[dsr(s_φeneg, s_jLP)] = Δxneg  # φeneg行jLP列
+            ravelK_[dsr(s_ηLP, s_φsneg)] = -1     # ηLP行φsneg列
+            ravelK_[dsr(s_ηLP, s_φeneg)] = 1      # ηLP行φeneg列
+
+        if self.verbose:
+            print(f'时域因变量线性矩阵 {ravelK_.base.shape = }')
+
+    def _update_K__bK_ce_ce_j(self,
+            DeeffWest_: ndarray, DeeffEast_: ndarray,
+            εe_: ndarray,
+            Kcej: float,
+            Δt: float,
+            old_ce_,
+            old_jneg_,
+            old_jpos_,
+            ):
+        # 更新K__矩阵ce行ce列
+        # 更新K__矩阵ce行j列
+        # 更新bK_向量ce行
+        Nneg, Nsep = self.Nneg, self.Nsep
+        ΔxWest_, ΔxEast_, Δx_ = self.ΔxWest_, self.ΔxEast_, self.Δx_
+        timeDiscretization = self.timeDiscretization
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        s_ce = sK.s_ce
+        dl_ = ravelK_[sK.sr_ce_ce_l]  # (Ne-1,) ce列下对角线
+        du_ = ravelK_[sK.sr_ce_ce_u]  # (Ne-1,) ce列上对角线
+        d_  = ravelK_[sr_ce_ce := sK.sr_ce_ce]  # (Ne,) ce列主对角线
+        dl_[:] = -DeeffWest_[1:]  / ΔxWest_[1:]
+        du_[:] = -DeeffEast_[:-1] / ΔxEast_[:-1]
+        d_[:]  = -(hstack([0, dl_]) + hstack([du_, 0]))
+        NK1 = self.bK_.size + 1
+        start0 = sr_ce_ce.start
+        for nW, nE in ((Nneg - 1, Nneg), (Nneg + Nsep - 1, Nneg + Nsep)):
+            # 修正负极-隔膜界面、隔膜-正极界面
+            nrW = start0 + nW*NK1
+            nrE = start0 + nE*NK1
+            a, c = -DeeffWest_[nW]/ΔxWest_[nW], -2*DeeffEast_[nW]*DeeffWest_[nE]/(DeeffEast_[nW]*Δx_[nE] + DeeffWest_[nE]*Δx_[nW])
+            ravelK_[nrW-1:nrW+2] = a, -(a + c), c  # 界面左侧控制体
+            a, c = c, -DeeffEast_[nE]/ΔxEast_[nE]
+            ravelK_[nrE-1:nrE+2] = a, -(a + c), c  # 界面右侧控制体
+        Δt2Δx_ = Δt/Δx_
+        dl_ *= Δt2Δx_[1:]   # ce列下对角线
+        du_ *= Δt2Δx_[:-1]  # ce列上对角线
+        d_  *= Δt2Δx_       # ce列主对角线
+        if timeDiscretization=='CN':
+            dl_ *= .5
+            du_ *= .5
+            d_  *= .5
+            Bce__ = -ravelK_.base[s_ce, s_ce]  # (Ne, Ne)
+            Bce__.ravel()[::self.Ne+1] += εe_  # 对角元+εe_
+        d_ += εe_  # 对角元+εe_
+
+        # 更新K__矩阵ce行j列
+        if timeDiscretization=='CN':
+            Kcej *= .5
+        ravelK_[sK.sr_ceneg_jintneg] = Kcej  # jintneg列
+        ravelK_[sK.sr_cepos_jintpos] = Kcej  # jintneg列、jintpos列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_ceneg_jDLneg] = Kcej  # jDLneg列
+            ravelK_[sK.sr_cepos_jDLpos] = Kcej  # jDLpos列
         if self.lithiumPlating:
-            idxjLP_ = self.idxjLP_
-            idxηLP_ = self.idxηLP_
-            K__[idxφeneg_, idxjLP_] = Δxneg  # φeneg行jLP列
-            K__[idxjLP_, idxjLP_] = 1     # jLP行jLP列
-            K__[idxηLP_, idxφsneg_] = -1  # ηLP行φsneg列
-            K__[idxηLP_, idxφeneg_] = 1   # ηLP行φeneg列
-            K__[idxηLP_, idxηLP_] = 1     # ηLP行ηLP列
+            ravelK_[sK.sr_ceneg_jLP] = Kcej  # jLP列
 
-    def update_K__idxcsnegsurf_idxjintneg_(self, aneg, Dsneg):
-        # 更新K__矩阵csnegsurf行jintneg列
-        self.K__[self.idxcsnegsurf_, self.idxjintneg_] = 1/(aneg*P2Dbase.F*Dsneg)
+        bK_ = self.bK_
+        match timeDiscretization:
+            case 'CN':
+                bK_[s_ce] = Bce__.dot(old_ce_)
+                bK_[sK.s_ceneg] -= Kcej * old_jneg_
+                bK_[sK.s_cepos] -= Kcej * old_jpos_
+            case 'backward':
+                bK_[s_ce] = εe_ * old_ce_
 
-    def update_K__idxcspossurf_idxjintpos_(self, apos, Dspos):
-        # 更新K__矩阵cspossurf行jintpos列
-        self.K__[self.idxcspossurf_, self.idxjintpos_] = 1/(apos*P2Dbase.F*Dspos)
-
-    def update_K__idxφsneg_idxjneg_(self, σeffneg):
+    def _update_K__φsneg_jneg(self, σeffneg):
         # 更新K__矩阵φsneg行jneg列
-        K__ = self.K__
-        idxφsneg_ = self.idxφsneg_
-        K__[idxφsneg_, self.idxjintneg_] = a = -self.Δxneg**2/σeffneg  # jintneg列
-        if self.idxjDLneg_.size:
-            K__[idxφsneg_, self.idxjDLneg_] = a  # jDLneg列
-        if self.idxjLP_.size:
-            K__[idxφsneg_, self.idxjLP_] = a     # jLP列
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        Δxneg = self.Δxneg
+        a = -Δxneg*Δxneg/σeffneg
+        ravelK_[sK.sr_φsneg_jintneg] = a     # jintneg列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_φsneg_jDLneg] = a  # jDLneg列
+        if self.lithiumPlating:
+            ravelK_[sK.sr_φsneg_jLP] = a     # jLP列
 
-    def update_K__idxφspos_idxjpos_(self, σeffpos):
+    def _update_K__φspos_jpos(self, σeffpos):
         # 更新K__矩阵φspos行jpos列
-        K__ = self.K__
-        K__[self.idxφspos_, self.idxjintpos_] = a = -self.Δxpos**2/σeffpos  # jintpos列
-        if self.idxjDLpos_.size:
-            K__[self.idxφspos_, self.idxjDLpos_] = a  # jDLpos列
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        Δxpos = self.Δxpos
+        a = -Δxpos*Δxpos/σeffpos
+        ravelK_[sK.sr_φspos_jintpos] = a     # jintpos列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_φspos_jDLpos] = a  # jDLpos列
 
-    def update_K__idxφe_idxφe_(self, κeffWest_, κeffEast_):
+    def _update_K__φe_φe(self, κeffWest_, κeffEast_):
         # 更新K__矩阵φe行φe列
         ΔxEast_, ΔxWest_, Δx_ = self.ΔxEast_, self.ΔxWest_, self.Δx_
         Nneg, Nsep = self.Nneg, self.Nsep
-        K__ = self.K__
-        idxφe_ = self.idxφe_
-        a = κeffEast_[0]/ΔxEast_[0]
-        K__[idxφe_[0], idxφe_[:2]] = [-(κeffWest_[0]/(0.5*Δx_[0]) + a), a]  # φe列首行
-        a = κeffWest_[-1]/ΔxWest_[-1]
-        K__[idxφe_[-1], idxφe_[-2:]] = [a, -a]  # φe列末行
-        K__[idxφe_[1:-1], idxφe_[:-2]] = a_ = κeffWest_[1:-1]/ΔxWest_[1:-1]  # φe列下对角线
-        K__[idxφe_[1:-1], idxφe_[2:]] = c_ = κeffEast_[1:-1]/ΔxEast_[1:-1]   # φe列上对角线
-        K__[idxφe_[1:-1], idxφe_[1:-1]] = -(a_ + c_)  # φe列主对角线
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        dl_ = ravelK_[sK.sr_φe_φe_l]
+        du_ = ravelK_[sK.sr_φe_φe_u]
+        d_  = ravelK_[sr_φe_φe := sK.sr_φe_φe]
+        dl_[:] = κeffWest_[1:] /ΔxWest_[1:]              # (Ne-1,) φe列下对角线
+        du_[:] = κeffEast_[:-1]/ΔxEast_[:-1]             # (Ne-1,) φe列上对角线
+        d_[:]  = -(hstack([0, dl_]) + hstack([du_, 0]))  # (Ne,) φe列主对角线
+        d_[0] -= κeffWest_[0]/(0.5*Δx_[0])               # 首元占优
+        NK1 = self.bK_.size + 1
+        start0 = sr_φe_φe.start
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
             # 修正负极-隔膜界面、隔膜-正极界面
+            nrW = start0 + nW*NK1
+            nrE = start0 + nE*NK1
             a, c = κeffWest_[nW]/ΔxWest_[nW], 2*κeffEast_[nW]*κeffWest_[nE]/(κeffEast_[nW]*Δx_[nE] + κeffWest_[nE]*Δx_[nW])
-            K__[idxφe_[nW], idxφe_[nW-1:nW+2]] = [a, -(a + c), c]  # 界面左侧控制体
+            ravelK_[nrW-1:nrW+2] = a, -(a + c), c  # 界面左侧控制体
             a, c = c, κeffEast_[nE]/ΔxEast_[nE]
-            K__[idxφe_[nE], idxφe_[nE-1:nE+2]] = [a, -(a + c), c]  # 界面右侧控制体
+            ravelK_[nrE-1:nrE+2] = a, -(a + c), c  # 界面右侧控制体
 
-    def update_K__idxηintneg_idxjneg_(self, RSEIneg, aeffneg):
-        # 更新K__矩阵ηintneg行jneg列
-        K__ = self.K__
-        K__[self.idxηintneg_, self.idxjintneg_] = a = RSEIneg/aeffneg  # jintneg列
-        if self.idxjDLneg_.size:
-            K__[self.idxηintneg_, self.idxjDLneg_] = a  # jDLneg列
+    def _update_K__bK_jDL_φs_φe_j(self,
+                                  aeffneg, aeffpos,
+                                  RSEIneg, RSEIpos,
+                                  CDLneg, CDLpos,
+                                  Δt):
+        # 更新K__矩阵jDL行φs、φe、j列
+        # 更新bK_向量jDL行
+        CDLneg  = aeffneg*CDLneg
+        CDLpos  = aeffpos*CDLpos
+        RSEIneg = RSEIneg/aeffneg
+        RSEIpos = RSEIpos/aeffpos
+        ravelK_ = self.ravelK_
+        bK_ = self.bK_
+        sK = self.sK
+        s_jDLneg = sK.s_jDLneg
+        s_jDLpos = sK.s_jDLpos
+        data = self.data
+        data_t_ = data['t']
+        Nt = len(data_t_)  # 存储数据时刻数
+        t_1 = data_t_[-1]  # 上一时刻 [s]
+        t_2 = data_t_[-2] if Nt>1 else None  # 上上一时刻
+        t_3 = data_t_[-3] if Nt>2 else None  # 上上上一时刻
+        t = t_1 + Δt  # 当前时刻 [s]
+        c = 1/Δt
+        if Nt>1: c += 1/(t - t_2)
+        if Nt>2: c += 1/(t - t_3)
+        CDLneg2Δt = CDLneg*c
+        CDLpos2Δt = CDLpos*c
+        # 负极双电层局部体积电流密度jDLneg行
+        ravelK_[sK.sr_jDLneg_φsneg] = -CDLneg2Δt  # φsneg列
+        ravelK_[sK.sr_jDLneg_φeneg] =  CDLneg2Δt  # φeneg列
+        ravelK_[sK.sr_jDLneg_jintneg] = a = CDLneg2Δt*RSEIneg  # jintneg列
+        ravelK_[sK.sr_jDLneg_jDLneg]  = 1 + a     # jDLneg列
         if self.lithiumPlating:
-            K__[self.idxηintneg_, self.idxjLP_] = a     # jLP列
+            ravelK_[sK.sr_jDLneg_jLP] = a  # jLP列
+        # 正极双电层局部体积电流密度jDLpos行
+        ravelK_[sK.sr_jDLpos_φspos] = -CDLpos2Δt  # φspos列
+        ravelK_[sK.sr_jDLpos_φepos] = CDLpos2Δt   # φepos列
+        ravelK_[sK.sr_jDLpos_jintpos] = a = CDLpos2Δt*RSEIpos  # jintpos列
+        ravelK_[sK.sr_jDLpos_jDLpos] = 1 + a      # jDLpos列
 
-    def update_K__idxηintpos_idxjpos_(self, RSEIpos, aeffpos):
+        Δφseneg_1_ = (ηLPneg__ := data['ηLPneg_'])[-1]  # 上一时刻负极固液相电势场之差
+        Δφsepos_1_ = (ηLPpos__ := data['ηLPpos_'])[-1]  # 上一时刻负极、正极固液相电势场之差
+        Δφseneg_2_ = ηLPneg__[-2] if Nt>1 else None    # 上上时刻
+        Δφsepos_2_ = ηLPpos__[-2] if Nt>1 else None     # 上上时刻
+        Δφseneg_3_ = ηLPneg__[-3] if Nt>2 else None    # 上上上时刻
+        Δφsepos_3_ = ηLPpos__[-3] if Nt>2 else None     # 上上上时刻
+        if Nt>2:
+            A = (t - t_2)*(t - t_3)/-Δt/(t_1 - t_2)/(t_1 - t_3)
+            B = Δt*(t - t_3)/(t_2 - t)/(t_2 - t_1)/(t_2 - t_3)
+            C = Δt*(t - t_2)/(t_3 - t)/(t_3 - t_1)/(t_3 - t_2)
+            bK_[s_jDLneg] = CDLneg * (A*Δφseneg_1_ + B*Δφseneg_2_ + C*Δφseneg_3_)
+            bK_[s_jDLpos] = CDLpos * (A*Δφsepos_1_ + B*Δφsepos_2_ + C*Δφsepos_3_)
+        elif Nt==2:
+            A = (t - t_2)/(-Δt*(t_1 - t_2))
+            B = Δt/((t_2 - t)*(t_2 - t_1))
+            bK_[s_jDLneg] = CDLneg * (A*Δφseneg_1_ + B*Δφseneg_2_)
+            bK_[s_jDLpos] = CDLpos * (A*Δφsepos_1_ + B*Δφsepos_2_)
+        else:
+            bK_[s_jDLneg] = -CDLneg2Δt * Δφseneg_1_
+            bK_[s_jDLpos] = -CDLpos2Δt * Δφsepos_1_
+
+    def _update_K__ηintneg_jneg(self, RSEIneg, aeffneg):
+        # 更新K__矩阵ηintneg行jneg列
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        a = RSEIneg/aeffneg
+        ravelK_[sK.sr_ηintneg_jintneg] = a     # jintneg列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_ηintneg_jDLneg] = a  # jDLneg列
+        if self.lithiumPlating:
+            ravelK_[sK.sr_ηintneg_jLP] = a     # jLP列
+
+    def _update_K__ηintpos_jpos(self, RSEIpos, aeffpos):
         # 更新K__矩阵ηintpos行jpos列
-        K__ = self.K__
-        K__[self.idxηintpos_, self.idxjintpos_] = a = RSEIpos/aeffpos  # jintpos列
-        if self.idxjDLpos_.size:
-            K__[self.idxηintpos_, self.idxjDLpos_] = a  # jDLpos列
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        a = RSEIpos/aeffpos
+        ravelK_[sK.sr_ηintpos_jintpos] = a     # jintpos列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_ηintpos_jDLpos] = a  # jDLpos列
 
-    def update_K__idxηLP_idxjneg_(self, RSEIneg, aeffneg):
+    def _update_K__ηLP_jneg(self, RSEIneg, aeffneg):
         # 更新K__矩阵ηLP行jneg列
-        K__ = self.K__
-        idxηLP_ = self.idxηLP_
-        K__[idxηLP_, self.idxjintneg_] = \
-        K__[idxηLP_, self.idxjLP_] = a = RSEIneg/aeffneg  # jintneg、jLP列
-        if self.idxjDLneg_.size:
-            K__[idxηLP_, self.idxjDLneg_] = a             # jDLneg列
+        ravelK_ = self.ravelK_
+        sK = self.sK
+        a = RSEIneg/aeffneg
+        ravelK_[sK.sr_ηLP_jintneg] = \
+        ravelK_[sK.sr_ηLP_jLP] = a  # jintneg、jLP列
+        if self.doubleLayerEffect:
+            ravelK_[sK.sr_ηLP_jDLneg] = a  # jDLneg列
 
     def CC(self,
-            I: float | int = 0,             # 电流 [A]，放电为正，充电为负
-            timeInterval: float | int = 1,  # 充放电运行时间 [s]
-            thermalModel: bool = False,     # 是否计算电池产热
-            Umax: float | None = None,      # 最高电压 [V]
-            Umin: float | None = None,      # 最低电压 [V]
-            SOCmax: float | None = None,    # 最大SOC
-            SOCmin: float | None = None,    # 最小SOC
-            minΔt: float = 0.1,             # 最小时间步长 [s]
-            ):
+           I: float | int = 0,           # 电流 [A]，放电为正，充电为负
+           duration: float | int = 1,    # 充放电运行时间 [s]
+           thermalModel: bool = False,   # 是否计算电池产热
+           Umax: float | None = None,    # 最高电压 [V]
+           Umin: float | None = None,    # 最低电压 [V]
+           SOCmax: float | None = None,  # 最大SOC
+           SOCmin: float | None = None,  # 最小SOC
+           minΔt: float = 0.1,  # 最小时间步长 [s]
+           ):
         """恒流充放电"""
-        assert self.Δt>=minΔt, f'时间步长Δt = {self.Δt}s，应大于{minΔt = }s'
+        assert minΔt<=self.Δt, f'最小时间步长 {minΔt = }s，应小于或等于Δt = {self.Δt}s'
         if verbose := self.verbose:
             startTime = time.time()  # 开始时间戳 [s]
+            info = f"电流{I = :.2f}A{'放电' if I>0 else ('充电' if I<0 else '静置')}"
+
+        # 读取模式
         lithiumPlating = self.lithiumPlating
+        constants = self.constants
+
+        # 读取方法
+        record_data = self.record_data
+        _stepping = self._stepping
+
+        t_ = self.data['t']  # 读取：已计算时刻序列
         if self.t==0:
-            self.record_data()        # 记录初始时刻数据
-        data = self.data              # 读取：运行数据字典
-        tStart = data['t'][-1]        # 开始时刻 [s]
-        tEnd = tStart + timeInterval  # 终止时刻 [s]
-        self.I = I                    # 电流 [A]
-        info = f"电流{I = :.2f}A{'放电' if I>0 else ('充电' if I<0 else '静置')}"
+            record_data()  # 记录初始时刻数据
+        tStart = t_[-1]    # 开始时刻 [s]
+        tStop = tStart + duration  # 终止时刻 [s]
+        self.I = I                 # 电流 [A]
+
+        # 生成矩阵K__矩阵、bK_向量、初始化纯电化学参数相关值
+        if self.ravelK_ is None:
+            self._generate_K__bK_and_slices()
+            self.update_K__with_pure_electrochemical_parameters()
 
         while True:
-            ### 持续时间步进...
+            ## 持续时间步进...
+
             # 检查终止条件
-            if self.t>=tEnd:
+            if self.t>=tStop:
                 if verbose:
-                    print(f'\n达到运行时长{timeInterval}s，停止{info}')
+                    print(f'\n达到运行时长{duration}s，停止{info}')
                 break
             if I<0 and (Umax is not None) and self.U>=Umax:
                 if verbose:
-                    print(f'\n充电达到{Umax = }V，停止充电')
+                    print(f'\n电压U达到{Umax = }V，停止{info}')
                 break
             if I<0 and (SOCmax is not None) and self.SOC>=SOCmax:
                 if verbose:
-                    print(f'\n充电达到{SOCmax = }，停止充电')
+                    print(f'\nSOC达到{SOCmax = }，停止{info}')
                 break
             if I>0 and (Umin is not None) and self.U<=Umin:
                 if verbose:
-                    print(f'\n放电达到{Umin = }V，停止放电')
+                    print(f'\n电压U达到{Umin = }V，停止{info}')
                 break
             if I>0 and (SOCmin is not None) and self.SOC<=SOCmin:
                 if verbose:
-                    print(f'\n放电达到{SOCmin = }，停止放电')
+                    print(f'\nSOC达到{SOCmin = }，停止{info}')
                 break
+
             # 选择时间步长
-            remainingTime = tEnd - self.t  # 剩余时长 [s]
+            remainingTime = tStop - self.t  # 剩余时长 [s]
             if remainingTime<(self.Δt + minΔt):
                 Δt = remainingTime  # 使用剩余时长作为最后时间步长
             else:
                 Δt = self.Δt  # 使用默认时间步长 [s]
 
+            # 更新K__矩阵纯电化学参数相关值
+            if constants:
+                pass
+            else:
+                self.update_K__with_pure_electrochemical_parameters()
+
             while True:
                 # 试探步进
-                self.t = self.data['t'][-1] + Δt  # 更新：时刻 [s]
                 try:
-                    nNewton = self.step(Δt)
-                    break  # 试探成功，无报错，跳出
+                    self.nNewton = _stepping(Δt)
+                    break  # 步进成功，无报错，跳出
                 except P2Dbase.Error as message:
                     if Δt==minΔt:
                         raise
-                    ΔtNew = max(minΔt, Δt/2)
+                    ΔtNew = max(minΔt, Δt*0.5)
                     if verbose:
-                        print(f'异常：{message}，缩小时间步长{Δt}s-->{ΔtNew}', )
+                        print(f'异常：{message}，缩小时间步长{Δt}s -> {ΔtNew}s', )
                     Δt = ΔtNew
                     continue
+
+            self.t = t_[-1] + Δt  # 更新：时刻 [s]
 
             if lithiumPlating:
                 self.QLP += -self.ILP*Δt/3600  # 更新：累计析锂量 [Ah]
 
             if thermalModel:
                 dTdt = (self.Qgen + self.hA*(self.Tamb - self.T))/self.Cth
-                self.T += dTdt*Δt  # 更新温度 [K]
+                self.T += dTdt*Δt  # 更新：温度 [K]
 
-            self.record_data()  # 记录运行数据
+            record_data()  # 记录运行数据
 
             if verbose:
                 # 显示进度
-                finishedProportion = (self.t - tStart)/timeInterval  # 已完成的比例
+                finishedProportion = (self.t - tStart)/duration  # 已完成的比例
                 finishedProgresses = int(25*finishedProportion)  # 已完成的进度条长度
                 unfinishedProgresses = 25 - finishedProgresses   # 未完成的进度条长度
                 finishedBar = '▓'*finishedProgresses        # 已完成的进度条
@@ -411,22 +758,23 @@ class P2Dbase(ABC):
                 U = self.U
                 SOC = self.SOC
                 print(f'|{finishedBar}{unfinishedBar}|已完成{percentage:.0f}%，耗时{timeStamp:.1f}s，'
-                      f't={self.t:g}s-->{tEnd:g}s，{info}，'
+                      f't={self.t:g}s-->{tStop:g}s，{info}，'
                       f'电压{U = :.3f}V, {SOC = :.3f}，温度{self.T - 273.15:.1f}°C，'
                       f'析锂过电位{self.ηLPneg_[-1]*1000:.0f}mV，'
-                      f'{nNewton}次Newton迭代'
+                      f'{self.nNewton}次Newton迭代'
                       f'\r', end='')
         return self
 
     def record_data(self):
         """记录数据"""
-        for dataname in self.datanames_:
-            value = getattr(self, dataname)
+        data = self.data
+        for name in self.datanames_:
+            value = getattr(self, name)
             if isscalar(value):
                 pass
             else:
                 value = value.copy()
-            self.data[dataname].append(value)
+            data[name].append(value)
 
     @property
     def kneg(self):
@@ -477,16 +825,6 @@ class P2Dbase(ABC):
     def xpos_(self):
         """正极区域控制体中心坐标"""
         return self.x_[-self.Npos:]
-
-    @property
-    def Δxneg(self):
-        """负极网格厚度"""
-        return self.Δx_[0]
-
-    @property
-    def Δxpos(self):
-        """正极网格厚度"""
-        return self.Δx_[-1]
 
     @property
     def xInterfaces_(self):
@@ -546,102 +884,97 @@ class P2Dbase(ABC):
         return UOCPpos_
 
     @staticmethod
-    def generate_x_related_coordinates(
-            Nneg: int, Nsep: int, Npos: int,        # 负极、隔膜、正极网格数
-            Lneg: float, Lsep: float, Lpos: float,  # 负极、隔膜、正极厚度 [m]/[–]
-            ):
-        """生成厚度方向x相关坐标"""
-        Δxneg = Lneg/Nneg  # 负极网格厚度
-        Δxsep = Lsep/Nsep  # 隔膜网格厚度
-        Δxpos = Lpos/Npos  # 正极网格厚度
-        x_ = hstack([
-            linspace(0, Lneg, Nneg + 1)[:-1] + Δxneg/2,
-            linspace(Lneg, Lneg + Lsep, Nsep + 1)[:-1] + Δxsep/2,
-            linspace(Lneg + Lsep, Lneg + Lsep + Lpos, Npos + 1)[:-1] + Δxpos/2,
-            ])  # (Ne,) 全区域各控制体中心坐标
-        Δx_ = concatenate([full(Nneg, Δxneg),
-                           full(Nsep, Δxsep),
-                           full(Npos, Δxpos)])  # (Ne,) 全区域控制体厚度
-        ΔxWest_ = hstack([
-            full(Nneg, Δxneg),
-            (Δxneg + Δxsep)/2, full(Nsep - 1, Δxsep),
-            (Δxsep + Δxpos)/2, full(Npos - 1, Δxpos)])  # (Ne,) 当前控制体中心到左侧控制体中心的距离
-        ΔxEast_ = hstack([
-            full(Nneg - 1, Δxneg), (Δxneg + Δxsep)/2,
-            full(Nsep - 1, Δxsep), (Δxsep + Δxpos)/2,
-            full(Npos, Δxpos)])                         # (Ne,) 当前控制体中心到右侧控制体中心的距离
-        return x_, Δx_, ΔxWest_, ΔxEast_
-
-    @staticmethod
-    def generate_r_related_coordinates(Nr, Rs, radialDiscretization='EV'):
-        """生成颗粒径向r相关坐标"""
-        a = 4/3 * 3.141592653589793
+    def generate_r_Δr_bandKcs__(Nr, Rs, radialDiscretization='EV'):
+        """生成颗粒径向r相关坐标、(Nr, Nr)矩阵Kcs__的带bandKcs__"""
         Rs3 = 1 if Rs==1 else (Rs*Rs*Rs)
-        match radialDiscretization:
-            case 'EV':
-                # 等体积划分球壳网格
-                V = a*Rs3  # 颗粒体积 [m^3]/[–]
-                ΔV = V/Nr  # 球壳控制体体积 [m^3]/[–]
-                rW_ = (ΔV*arange(0, Nr)/a)**(1/3)      # (Nr,) 球壳内界面坐标 [m]/[–]
-                rE_ = (ΔV*arange(1, Nr + 1)/a)**(1/3)  # (Nr,) 球壳外界面坐标 [m]/[–]
-                r_ = (rW_ + rE_)/2  # (Nr,) 颗粒径向控制体中心的坐标 [m]/[–]
-                Δr_ = rE_ - rW_     # (Nr,) 颗粒球壳网格厚度序列 [m]/[–]
-            case 'EI':
-                # 等间隔划分球壳网格
-                Δr = Rs/Nr                                # 颗粒球壳网格厚度 [m]/[–]
-                r_ = linspace(0, Rs, Nr + 1)[:-1] + Δr/2  # (Nr,) 颗粒径向控制体中心的坐标 [m]/[–]
-                Δr_ = full(Nr, Δr)                        # (Nr,) 颗粒球壳网格厚度序列 [m]/[–]
-        Vr_ = ((r_ + Δr_/2)**3
-             - (r_ - Δr_/2)**3)/Rs3  # (Nr,) 球壳体积分数序列 [–]
-        return r_, Δr_, Vr_
+        if radialDiscretization=='EV':
+            # 等体积划分球壳网格
+            a = 4.1887902047863905  # 4π/3
+            V = a*Rs3  # 颗粒体积 [m^3]/[–]
+            ΔV = V/Nr  # 球壳控制体体积 [m^3]/[–]
+            rO_ = cbrt(ΔV*arange(1, Nr + 1)/a)  # (Nr,) 球壳外界面坐标 [m]/[–]
+            rI_ = hstack([0, rO_[:-1]])         # (Nr,) 球壳内界面坐标 [m]/[–]
+            r_ = (rI_ + rO_)*0.5  # (Nr,) 球壳控制体中心坐标 [m]/[–]
+            Δr_ = rO_ - rI_       # (Nr,) 球壳网格厚度序列 [m]/[–]
+            Vr_ = full(Nr, 1/Nr)  # (Nr,) 球壳体积分数序列 [–]
+        elif radialDiscretization=='EI':
+            # 等间隔划分球壳网格
+            Δr_ = full(Nr, Δr := Rs/Nr) # (Nr,) 球壳网格厚度序列 [m]/[–]
+            hΔr = Δr*0.5
+            r_ = arange(Nr)*Δr + hΔr    # (Nr,) 球壳控制体中心坐标 [m]/[–]
+            rO_ = r_ + hΔr
+            rI_ = r_ - hΔr
+            Vr_ = (rO_*rO_*rO_ - rI_*rI_*rI_)/Rs3  # (Nr,) 球壳体积分数序列 [–]
+
+        Nr1 = Nr + 1
+        dr_ = r_[1:] - r_[:-1]  # (Nr-1,)
+        rO2_ = rO_*rO_          # (Nr,)
+        rI2_ = rI_*rI_          # (Nr,)
+        Kcs__ = zeros((Nr, Nr))
+        Kcs__ravel_ = Kcs__.ravel()
+        Kcs__ravel_[Nr::Nr1] = a_ = -rI2_[1:] /dr_  # (Nr-1,) 下对角线
+        Kcs__ravel_[1::Nr1]  = c_ = -rO2_[:-1]/dr_  # (Nr-1,) 上对角线
+        Kcs__ravel_[::Nr1] = -(hstack([0., a_]) + hstack([c_, 0.]))  # (Nr, ) 主对角线
+        Kcs__ /= ((rO2_*rO_ - rI2_*rI_)/3).reshape(-1, 1)
+        bandKcs__ = zeros((3, Nr))
+        bandKcs__[0, 1:]  = Kcs__ravel_[1::Nr1]   # (Nr-1,) 上对角线
+        bandKcs__[1, :]   = Kcs__ravel_[::Nr1]    # (Nr,) 主对角线
+        bandKcs__[2, :-1] = Kcs__ravel_[Nr::Nr1]  # (Nr-1,) 下对角线
+
+        return r_, Δr_, Vr_, bandKcs__
 
     @staticmethod
     def solve_banded_matrix(
             A__: ndarray,                  # (N, N) 矩阵
             b_: ndarray,                   # (N,) A__ @ X_ = b_
-            idxreordered_: Sequence[int],  # (N,) 索引：重排，使矩阵A__带状化
-            idxrecovered_: Sequence[int],  # (N,) 索引：恢复排序
-            bandwidths_: dict[str, ndarray]):
+            idxReorder_: Sequence[int],    # (N,) 索引：重排A__，使带状化
+            idxRecover_: Sequence[int],    # (N,) 索引：恢复排序
+            l: int,  # 下带宽
+            u: int,  # 上带宽
+            ):
         """解带状化矩阵"""
         N = A__.shape[0]  # 因变量总数
-        u, l = bandwidths_['upper'], bandwidths_['lower']  # 上下带宽
-        Areordered__ = A__[ix_(idxreordered_, idxreordered_)]       # 重新排列矩阵A__，使之带状化
-        ab__ = zeros((2*l + u + 1, N), dtype=A__.dtype, order='F')  # 适合dgbsv
+        A__ = A__[ix_(idxReorder_, idxReorder_)]  # 重新排列矩阵A__，使之带状化
+        ab__ = zeros((2*l + u + 1, N),
+                     dtype=A__.dtype, order='F')  # 适合dgbsv
         band__ = ab__[l:, :]   # (u + l + 1, N) 矩阵A__的带
-        diag = Areordered__.diagonal
+        diag = A__.diagonal
         for row, offset in enumerate(range(u, -l - 1, -1)):
-            d_ = diag(offset)  # 提取矩阵Areordered__的带
+            d_ = diag(offset)  # 提取矩阵Areorder__的带
             start = max(0, offset)
             end   = min(N, N + offset)
             band__[row, start:end] = d_
-        X_ = dgbsv(l, u, ab__, asfortranarray(b_[idxreordered_]), True, True)[2]
-        # X_ = solve_banded((l, u), band__, asfortranarray(b_[idxReordered_]), True, True, False)
-        return X_[idxrecovered_]
+        X_ = dgbsv(l, u, ab__, asfortranarray(b_[idxReorder_]), True, True)[2]
+        # X_ = solve_banded((l, u), band__, asfortranarray(b_[idxReorder_]), True, True, False)
+        return X_[idxRecover_]
 
     @staticmethod
-    def identify_bandwidths(A__: ndarray):
-        """辨识矩阵的上、下带宽"""
+    def banded_experience(A__: ndarray) -> dict[str, ndarray | int]:
+        """带状化经验"""
+        idxReorder_ = reverse_cuthill_mckee(csr_matrix(A__))  # 索引：重排A__，使之带状化
+        idxRecover_ = idxReorder_.argsort()                   # 索引：恢复A__，使之还原
+        A__ = A__[ix_(idxReorder_, idxReorder_)]  # 带状化矩阵
+        ## 辨识带状矩阵的上、下带宽 ##
         N = A__.shape[0]
         diag = A__.diagonal
-        bandwidths_ = {}
         for offset in range(-N + 1, 0):
             # 从矩阵左下角开始遍历对角线
             if any(diag(offset)!=0):
-                bandwidths_['lower'] = abs(offset)  # 下带宽
+                l = abs(offset)  # 下带宽
                 break
         for offset in range(N - 1, 0, -1):
             # 从矩阵右上角开始遍历对角线
             if any(diag(offset)!=0):
-                bandwidths_['upper'] = offset       # 上带宽
+                u = offset       # 上带宽
                 break
-        return bandwidths_
+        return {'idxReorder_': idxReorder_, 'idxRecover_': idxRecover_, 'l': l, 'u': u}
 
     def Arrhenius(self,
                   X: float | None,  # 参考温度下的参数值
                   E: float,          # 活化能 [J/mol]
                   ):
         """Arrhenius温度修正"""
-        if self.constants or self.T==self.Tref or X is None:
+        if self.constants or self.T==self.Tref or X is None or E==0:
             return X
         return X * exp(E/P2Dbase.R*(1/self.Tref - 1/self.T))
 
@@ -707,7 +1040,6 @@ class P2Dbase(ABC):
         return θminneg, θmaxneg, θminpos, θmaxpos, ΔFmax
 
     def __str__(self):
-        K__ = self.K__
         Qcell, Qneg, Qpos = self.Qcell, self.Qneg, self.Qpos
         θminneg, θmaxneg, θminpos, θmaxpos = self.θminneg, self.θmaxneg, self.θminpos, self.θmaxpos
         lithiumPlating = self.lithiumPlating
@@ -718,7 +1050,6 @@ class P2Dbase(ABC):
         θsneg, θspos = self.θsneg, self.θspos
         OCV, U, tC, SOC = self.OCV, self.U, self.T - 273.15, self.SOC
         return (
-            f'时域因变量线性矩阵 {K__.shape = }\n'
             f'全电池理论可用容量：{Qcell = :.3f} Ah\n'
             f'电极容量：{Qneg = :.3f} Ah, {Qpos = :.3f} Ah\n'
             f'电极可用容量：{Qneg*(θmaxneg - θminneg) = :.3f} Ah, {Qpos*(θmaxpos - θminpos) = :.3f} Ah\n'
@@ -1272,17 +1603,30 @@ class P2Dbase(ABC):
         ax.legend()
         plt.show()
 
+    def plot_nNewton(self):
+        """Newton迭代次数nNewton-t曲线"""
+        t_ = self.data['t']
+        nNewton_ = self.data['nNewton']
+
+        fig = plt.figure(figsize=[10, 7])
+        ax = fig.add_subplot(111)
+        ax.plot(t_, nNewton_, 'x-k')
+        duration = max(t_) - min(t_)
+        ax.set_xlim([t_[0] - duration*0.02, t_[-1] + duration*0.02])
+        ax.set_xlabel(f'Time {self.tSign} [s]')
+        ax.set_ylabel('Number of Newton iterations')
+        ax.grid(axis='y', linestyle='--')
+        plt.show()
+
     def plot_interfaces(self, *axes_):
         for ax in axes_:
             ax.set_xlabel(rf'Location {self.xSign} [{self.xUnit or '–'}]')  # 横坐标标签
             ax.set_ylim(ax.get_ylim())                   # 固定纵坐标上下限
             ax.set_xlim(self.xInterfacesPlot_[[0, -1]])  # 横坐标上下限
-            ax.vlines(self.xInterfacesPlot_[self.Nneg], ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1],
-                      ls='--', color=[.5, .5, .5],
-                      alpha=0.5)  # 负极-隔膜界面
-            ax.vlines(self.xInterfacesPlot_[self.Nneg + self.Nsep], ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1],
-                      ls='--', color=[.5, .5, .5],
-                      alpha=0.5)  # 隔膜-正极界面
+            kw = {'ymin': ax.get_ylim()[0], 'ymax': ax.get_ylim()[1],
+                  'ls': '--', 'color': [.5]*3, 'alpha': 0.5}
+            ax.vlines(self.xInterfacesPlot_[self.Nneg], **kw)              # 负极-隔膜界面
+            ax.vlines(self.xInterfacesPlot_[self.Nneg + self.Nsep], **kw)  # 隔膜-正极界面
             ax.grid(axis='y', linestyle='--')  # 纵坐标网格线
     
     def save(self,
@@ -1311,27 +1655,14 @@ class P2Dbase(ABC):
         print(f'已保存{path}')
         return path
 
+    @staticmethod
+    def s2idx(s: slice) -> ndarray:
+        """将切片索引s转化为数组索引idx"""
+        return arange(s.start, s.stop, s.step)
+
     @abstractmethod
-    def step(self, Δt):
+    def _stepping(self, Δt):
         """时间步进：Newton法迭代因变量"""
-        pass
-
-    @property
-    @abstractmethod
-    def Qcell(self):
-        """全电池理论可用容量 [Ah]"""
-        pass
-
-    @property
-    @abstractmethod
-    def Qneg(self):
-        """负极容量 [Ah]"""
-        pass
-
-    @property
-    @abstractmethod
-    def Qpos(self):
-        """正极容量 [Ah]"""
         pass
 
     @property
@@ -1368,6 +1699,11 @@ class P2Dbase(ABC):
     @abstractmethod
     def xInterfacesPlot_(self):
         """各控制体交界面的坐标（用于作图） """
+        pass
+
+    @abstractmethod
+    def update_K__with_pure_electrochemical_parameters(self):
+        # 对K__矩阵赋纯电化学参数相关值
         pass
 
 if __name__=='__main__':

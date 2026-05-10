@@ -3,7 +3,10 @@ from P2Dmodel.LPJTFP2D import LPJTFP2D
 
 
 class ELPJTFP2D(LPJTFP2D):
-    """锂离子电池强化集总参数时频联合准二维模型（Enhanced Lumped-Parameter Joint Time-Frequency Pseudo-two-Dimension model）"""
+    """锂离子电池强化集总参数时频联合准二维模型 Enhanced Lumped-Parameter Joint Time-Frequency Pseudo-two-Dimension model"""
+
+    __slots__ = ('Kκneg', 'Kκpos', 'Kqeneg', 'Kqepos')
+
     def __init__(self,
             Kκneg: float | int = .5,   # 负极与隔膜集总电解液离子电导率之比 [–]
             Kκpos: float | int = .5,   # 正极与隔膜集总电解液离子电导率之比 [–]
@@ -29,12 +32,13 @@ class ELPJTFP2D(LPJTFP2D):
 if __name__=='__main__':
     import numpy as np
     cell = ELPJTFP2D(
-        SOC0=0.1,
+        SOC0=0.1, l=1e-8,
         f_=np.logspace(4, -1, 26),
         )
-
+    cell.EIS()
     cell.CC(-10, 2000).EIS()
     cell.CC(10, 2000).EIS()
+    cell.CC(0, 500).EIS()
 
     cell.count_lithium()
 

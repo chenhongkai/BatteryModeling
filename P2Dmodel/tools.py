@@ -16,7 +16,7 @@ M = 6.941e-3     # 锂的摩尔质量 [kg/mol]
 class LumpedParameters:
     """23集总参数取值"""
     def __init__(self,
-            Qnom: float | int = 1., # 电池标称容量 [Ah]
+            Qnom: float | int = 1, # 电池标称容量 [Ah]
             ):
         assert Qnom>0, '电池标称容量应大于0 [Ah]'
         Qnom_in_C = Qnom*3600  # 电池标称容量 [C]
@@ -320,12 +320,48 @@ class Interpolate1D:
 def triband_to_dense(band__: ndarray) -> ndarray:
     """三角阵的带band__ (3, N)  -> 稠密方阵K__ (N, N)"""
     N = band__.shape[1]
+    N1 = N + 1
     K__ = zeros((N, N), dtype=band__.dtype)
-    idx_ = arange(N)
-    K__[idx_, idx_] = band__[1]                # 主对角线
-    K__[idx_[:-1], idx_[1:]] = band__[0, 1:]   # 上对角线
-    K__[idx_[1:], idx_[:-1]] = band__[2, :-1]  # 下对角线
+    ravelK_ = K__.ravel()
+    ravelK_[1::N1] = band__[0, 1:]  # 上对角线
+    ravelK_[::N1]  = band__[1]        # 主对角线
+    ravelK_[N::N1] = band__[2, :-1]  # 下对角线
     return K__
+
+class DiagonalSliceRavel:
+    """变换切片索引：
+    s_row, s_col -> sr
+    A__[s_row, s_col].diagonal(offset) -> A__.ravel()[sr]"""
+    __slot__ = ('N',)
+
+    def __init__(self,
+                 N: int,  # 方阵维度 A__.shape[0]
+                 ):
+        self.N = N
+
+    def __call__(self,
+            s_rows: slice,    # 切片索引行
+            s_cols: slice,    # 切片索引列
+            offset: int = 0,  # 对角线 -1 0 1
+            ) -> slice:
+        """变换切片索引：A__[s_row, s_col].diagonal(offset) -> A__.ravel()[sr_diagonal]"""
+        startR = s_rows.start
+        startC = s_cols.start
+        Nrows = s_rows.stop - startR
+        Ncols = s_cols.stop - startC
+        N = self.N
+        start = startR * N + startC    # 主对角线起始
+        if offset==0:
+            length = min(Nrows, Ncols)  # 主对角线长度
+        elif offset>0:
+            start += offset
+            length = min(Nrows, Ncols - offset)
+        else:
+            start -= offset*N
+            length = min(Nrows + offset, Ncols)
+        step = N + 1
+        stop = start + length*step
+        return slice(start, stop, step)
 
 if __name__ == '__main__':
     pass

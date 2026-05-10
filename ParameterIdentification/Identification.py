@@ -76,13 +76,12 @@ class Identification(LumpedParameters):
             'Umax': Umax, 'Umin': Umin,
             'dUOCPdθsneg': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPneg),
             'dUOCPdθspos': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPpos),}
-        self.banded_experience = {key: None for key in
-            ['bandwidthsJ_',
-             'bandwidthsKf_',
-             'idxJreordered_',
-             'idxJrecovered_',
-             'idxKfReordered_',
-             'idxKfRecovered_']}
+        self.experiences_ = {
+            key: None for key in ['banded_experience_of_J__',
+                                  'banded_experience_of_Kf__',
+                                  'ravelKf_', 'bKf_',
+                                  'ravelK_', 'bK_',
+                                  'sK', 'sKf']}
         self.verbose = verbose
         if verbose:
             end = self.onset + self.TVT_[0]*self.duration
@@ -129,7 +128,7 @@ class Identification(LumpedParameters):
                   f'优化算法 {algorithm = }，目标类型 {objective = }\n'
                   f'时段{onset}-{onset + duration}s，频段{self.f_.min():g}~{self.f_.max():g}Hz，共{len(self.f_)}频点\n')
 
-        self.create_banded_experience()  # 创造带状化经验
+        self.create_experiences_()  # 创造带状化经验
         compute_cell = self.compute_cell
         compute_costs_ = self.compute_costs
 
@@ -267,22 +266,23 @@ class Identification(LumpedParameters):
         print(f'辨识耗时{record['timeconsumed']:.2f}h')
         return record
 
-    def create_banded_experience(self) -> None:
+    def create_experiences_(self) -> None:
         """创造带状化经验"""
         cell = LPJTFP2D(**self.kwargs)
-        cell.CC(-0.001, self.Δt*3).EIS()
-        for key in self.banded_experience:
-            self.banded_experience[key] = getattr(cell, key)
+        cell.CC(-0.01, self.Δt*3).EIS()
+        for key in self.experiences_:
+            self.experiences_[key] = getattr(cell, key)
+        # breakpoint()
         del cell
         if self.verbose:
-            print('已创造带状化经验！Banded experience has been created!')
+            print('已创造经验！Experiences have been created!')
 
     def compute_virtual_cell(self, pnorm_: dict[str, float]) -> LPJTFP2D:
         """计算虚拟电池"""
         assert set(pnorm_.keys())==set(self.names_), f'检查归一化参数字典pnorm_键，应符合{self.names_}'
         if self.verbose:
             print('计算虚拟电池…… Computing a virtual cell...')
-        self.create_banded_experience()
+        self.create_experiences_()
         cell = self.compute_cell(pnorm_)
         self.UDCmea_ = cell.interpolate('U', t_=self.tUDCmea_)
         self.Zmea__  = cell.interpolate('Z_', t_=self.tZmea_, f_=self.f_)
@@ -330,21 +330,36 @@ class Identification(LumpedParameters):
         try:
             p_ = self.Denormalize(pnorm_)
             cell = LPJTFP2D(**(self.kwargs | p_))  # 实例化
+
+            # 经验
+            exps_ = self.experiences_
+            cell.banded_experience_of_J__  = exps_['banded_experience_of_J__']
+            cell.banded_experience_of_Kf__ = exps_['banded_experience_of_Kf__']
+            cell.bK_ = exps_['bK_'].copy()
+            cell.bKf_ = exps_['bKf_'].copy()
+            cell.ravelK_ = exps_['ravelK_'].reshape(cell.bK_.size, -1).copy().ravel()
+            cell.ravelKf_ = exps_['ravelKf_'].reshape(cell.bKf_.size, -1).copy().ravel()
+            cell.sK = exps_['sK']
+            cell.sKf = exps_['sKf']
+            cell.update_Kf__with_pure_electrochemical_parameters()
+
             I, ΔtEIS  = self.I, self.ΔtEIS
-            for key, value in self.banded_experience.items():
-                setattr(cell, key, value)  # 带状化经验
             if states0:
                 cell.initialize_consistent(
-                    θsneg__=states0['θsneg__'], θspos__=states0['θspos__'],
+                    θsneg__=states0['θsneg__'],
+                    θspos__=states0['θspos__'],
                     θe_=states0['θe_'], I=I)
                 cell.EIS()
+            else:
+                cell.update_K__with_pure_electrochemical_parameters()
+
             tEnd = self.duration  # 充电终止时刻
             if tuple(targets_)==('UDC',):
-                cell.CC(I, timeInterval=tEnd)
+                cell.CC(I, duration=tEnd)
             else:
                 while True:
                     timeInterval = min(ΔtEIS, tEnd - cell.t)
-                    cell.CC(I, timeInterval=timeInterval)
+                    cell.CC(I, duration=timeInterval)
                     if timeInterval==ΔtEIS:
                         cell.EIS()
                     if cell.t >= tEnd:
@@ -553,5 +568,5 @@ class Identification(LumpedParameters):
 
 if __name__ == '__main__':
     task = Identification()
-    task.create_banded_experience()
+    task.create_experiences_()
 

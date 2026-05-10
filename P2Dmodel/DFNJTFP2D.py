@@ -1,31 +1,36 @@
 #%%
 from typing import Sequence
-from decimal import Decimal
-from math import cos, sin
 
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import reverse_cuthill_mckee
 from numpy import ndarray,\
-    array, zeros, full, hstack, \
+    array, zeros, full, hstack, stack, \
     empty, logspace,\
-    sinh, cosh, outer,\
-    ix_
+    sinh, cosh, sqrt, exp, cos, sin, outer
+
 from numpy.linalg import solve
 
-from P2Dmodel.JTFbase import JTFbase
+from P2Dmodel.JTFbase import JTFbase, JTFbase__slots__
 from P2Dmodel.DFNP2D import DFNP2D
 from P2Dmodel.P2Dbase import P2Dbase
 
+
 class DFNJTFP2D(JTFbase, DFNP2D):
     """锂离子电池时频联合经典准二维模型 Doyle-Fuller-Newman Joint Time-Frequency Pseudo-two-Dimension model"""
+
+    __slots__ = (
+        # DFNJTFP2D专有状态量
+        'REcsnegsurf__', 'IMcsnegsurf__', 'REcspossurf__', 'IMcspossurf__', 'REce__', 'IMce__',
+        'REjintneg__',   'IMjintneg__',   'REjintpos__',   'IMjintpos__',
+        'REjDLneg__',    'IMjDLneg__',    'REjDLpos__',    'IMjDLpos__',
+        'REi0intneg__',  'IMi0intneg__',  'REi0intpos__',  'IMi0intpos__',
+        'REjLP__',       'IMjLP__',
+        *JTFbase__slots__)
 
     def __init__(self,
             f_: Sequence[float] = logspace(3, -1, 26),  # 频率序列 [Hz]
             **kwargs):
         DFNP2D.__init__(self, **kwargs)
         JTFbase.__init__(self, f_)
-        lithiumPlating, complete, verbose = self.lithiumPlating, self.complete, self.verbose  # 读取：模式
-        if complete:
+        if self.complete:
             Nf, Nneg, Npos, Ne = len(f_), self.Nneg, self.Npos, self.Ne  # 读取：网格数
             # 状态量
             self.REcsnegsurf__, self.IMcsnegsurf__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极固相表面浓度实部、虚部
@@ -37,126 +42,94 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             self.REjDLpos__, self.IMjDLpos__ = empty((Nf, Npos)), empty((Nf, Npos))      # 正极双电层局部体积电流密度实部、虚部
             self.REi0intneg__, self.IMi0intneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极交换电流密度实部、虚部
             self.REi0intpos__, self.IMi0intpos__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极交换电流密度实部、虚部
-            if lithiumPlating:
+            if self.lithiumPlating:
                 self.REjLP__, self.IMjLP__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极析锂反应局部体积电流密度实部、虚部
-
             # 恒定量
-            self.EISdatanames_.extend([            # 需记录的阻抗数据名称
-                'Zneg_', 'Zpos_',                  # 负极、正极复阻抗 [Ω]
+            extra_EISdatanames_ = [                # 需记录的阻抗数据名称
                 'REcsnegsurf__', 'IMcsnegsurf__',  # 负极固相表面锂离子浓度实部、虚部 [mol/m^3]
                 'REcspossurf__', 'IMcspossurf__',  # 正极固相表面锂离子浓度实部、虚部 [mol/m^3]
-                'REce__', 'IMce__',            # 电解液锂离子浓度实部、虚部 [mol/m^3]
-                'REφsneg__', 'IMφsneg__',      # 负极固相电势实部、虚部 [V]
-                'REφspos__', 'IMφspos__',      # 正极固相电势实部、虚部 [V]
-                'REφe__', 'IMφe__',            # 电解液电势实部、虚部 [V]
-                'REjintneg__', 'IMjintneg__',  # 负极主反应局部体积电流密度实部、虚部 [A/m^3]
-                'REjintpos__', 'IMjintpos__',  # 正极主反应局部体积电流密度实部、虚部 [A/m^3]
-                'REjDLneg__', 'IMjDLneg__',    # 负极双电层效应局部体积电流密度实部、虚部 [A/m^3]
-                'REjDLpos__', 'IMjDLpos__',    # 正极双电层效应局部体积电流密度实部、虚部 [A/m^3]
+                'REce__', 'IMce__',              # 电解液锂离子浓度实部、虚部 [mol/m^3]
+                'REjintneg__', 'IMjintneg__',    # 负极主反应局部体积电流密度实部、虚部 [A/m^3]
+                'REjintpos__', 'IMjintpos__',    # 正极主反应局部体积电流密度实部、虚部 [A/m^3]
+                'REjDLneg__', 'IMjDLneg__',      # 负极双电层效应局部体积电流密度实部、虚部 [A/m^3]
+                'REjDLpos__', 'IMjDLpos__',      # 正极双电层效应局部体积电流密度实部、虚部 [A/m^3]
                 'REi0intneg__', 'IMi0intneg__',  # 负极主反应交换电流密度实部、虚部 [A/m^2]
-                'REi0intpos__', 'IMi0intpos__',  # 正极主反应交换电流密度实部、虚部 [A/m^2]
-                'REηintneg__', 'IMηintneg__',    # 负极主反应过电位实部、虚部 [V]
-                'REηintpos__', 'IMηintpos__',])  # 正极主反应过电位实部、虚部 [V]
-        self.data.update({EISdataname: [] for EISdataname in self.EISdatanames_})  # 字典：存储呈时间序列的阻抗数据
-        N = self.generate_indices_of_frequency_domain_dependent_variables()  # 生成索引：频域因变量
-        self.Kf__ = Kf__ = zeros((N, N))  # 频域因变量线性矩阵
-        self.bKf_ = zeros(N)              # Kf__ @ X_ = bKf_
-        # 对频域因变量线性矩阵Kf__赋参数相关值
-        self.update_Kf__idxREce_idxREce_and_idxIMce_idxIMce_(Deeff_ := self.Deeff_, Deeff_)
-        self.update_Kf__idxREce_idxREj_and_idxIMce_idxIMj_(self.tplus)
-        self.update_Kf__idxREφsneg_idxREjneg_and_idxIMφsneg_idxIMjneg_(σeffneg := self.σeffneg)
-        self.update_Kf__idxREφspos_idxREjpos_and_idxIMφspos_idxIMjpos_(σeffpos := self.σeffpos)
-        self.update_bKf_idxREφsneg_0_and_idxREφspos_end(σeffneg, σeffpos)
-        self.update_Kf__idxREφe_idxREφe_and_idxIMφe_idxIMφe_(κeff_ := self.κeff_, κeff_)
-        self.update_Kf__idxREηintneg_idxREjneg_and_idxIMηintneg_idxIMjneg_(self.RSEIneg, self.aeffneg)
-        self.update_Kf__idxREηintpos_idxREjpos_and_idxIMηintpos_idxIMjpos_(self.RSEIpos, self.aeffpos)
-        if lithiumPlating:
-            self.update_Kf__idxREηLP_idxREjneg_and_idxIMηLP_idxIMjneg_(self.RSEIneg, self.aeffneg)
-        # 对频域因变量线性矩阵Kf__赋恒定值
-        self.assign_Kf__with_constants()
-        if verbose and type(self) is DFNJTFP2D:
-            print(f'频域因变量线性矩阵 Kf__.shape = {Kf__.shape}')
+                'REi0intpos__', 'IMi0intpos__',] # 正极主反应交换电流密度实部、虚部 [A/m^2]
+            self.EISdatanames_.extend(extra_EISdatanames_)
+            self.data.update({name: [] for name in extra_EISdatanames_})  # 字典：存储呈时间序列的阻抗数据
+
+        if self.verbose and type(self) is DFNJTFP2D:
             print(self)
             print('经典时频联合P2D模型(DFNJTFP2D)初始化完成!')
 
     def solve_frequency_dependent_variables(self) -> dict[str, ndarray]:
         """求解频率相关变量"""
         ω_ = self.ω_
-        solve_Kcssurf__ = DFNJTFP2D.solve_Kcssurf__
-        Rsneg, Rspos, CDLneg, CDLpos, Dsneg, Dspos = (
-            self.Rsneg, self.Rspos, self.CDLneg, self.CDLpos, self.Dsneg, self.Dspos)
-        aneg, apos = self.aneg, self.apos
+        solve_Kcssurf__ = DFNJTFP2D.solve_Kcssurf___
+        CDLneg, CDLpos = self.CDLneg, self.CDLpos
         frequency_dependent_variables = {
-            'ωεeΔx__': outer(ω_, self.εe_*self.Δx_),  # (Nf, Ne) 各频率各控制体的ω*εe*Δx值
+            'ωεeΔx__': outer(ω_, self.εe_*self.Δx_),     # (Nf, Ne) 各频率各控制体的ω*εe*Δx值
             'ωaCDLneg_': ω_ * (self.aeffneg*CDLneg),     # (Nf,)
             'ωaCDLpos_': ω_ * (self.aeffpos*CDLpos),     # (Nf,)
             'ωCDLRSEIneg_': ω_ * (CDLneg*self.RSEIneg),  # (Nf,)
             'ωCDLRSEIpos_': ω_ * (CDLpos*self.RSEIpos),  # (Nf,)
-            'minusKcsnegsurf___': -array([solve_Kcssurf__(ω, Rsneg, Dsneg, aneg) for ω in ω_]),   # (Nf, 2, 2) 负极各频率Kcssurf__矩阵
-            'minusKcspossurf___': -array([solve_Kcssurf__(ω, Rspos, Dspos, apos) for ω in ω_]),}  # (Nf, 2, 2) 正极各频率Kcssurf__矩阵
+            'minusKcsnegsurf___': -solve_Kcssurf__(ω_, self.Rsneg, self.Dsneg, self.aneg),   # (Nf, 2, 2) 负极各频率Kcssurf__矩阵
+            'minusKcspossurf___': -solve_Kcssurf__(ω_, self.Rspos, self.Dspos, self.apos),}  # (Nf, 2, 2) 正极各频率Kcssurf__矩阵
         return frequency_dependent_variables
 
-    def update_Kf__idxREce_idxREj_and_idxIMce_idxIMj_(self, tplus):
+    def update_Kf__with_pure_electrochemical_parameters(self):
+        # 对频域因变量线性矩阵Kf__赋纯电化学参数相关值
+        self.update_Kf__REce_REce_and_IMce_IMce_(Deeff_ := self.Deeff_, Deeff_)
+        self.update_Kf__REce_REj_and_IMce_IMj_(self.tplus)
+        self.update_Kf__REφsneg_REjneg_and_IMφsneg_IMjneg_(σeffneg := self.σeffneg)
+        self.update_Kf__REφspos_REjpos_and_IMφspos_IMjpos_(σeffpos := self.σeffpos)
+        self.update_bKf_REφsneg0_and_REφsposEnd(σeffneg, σeffpos)
+        self.update_Kf__REφe_REφe_and_IMφe_IMφe_(κeff_ := self.κeff_, κeff_)
+        self.update_Kf__REηintneg_REjneg_and_IMηintneg_IMjneg_(self.RSEIneg, self.aeffneg)
+        self.update_Kf__REηintpos_REjpos_and_IMηintpos_IMjpos_(self.RSEIpos, self.aeffpos)
+        if self.lithiumPlating:
+            self.update_Kf__REηLP_REjneg_and_IMηLP_IMjneg_(self.RSEIneg, self.aeffneg)
+
+    def update_Kf__REce_REj_and_IMce_IMj_(self, tplus):
         # 更新Kf__矩阵REce行REj列、IMce行IMj列
         a = (1 - tplus)/P2Dbase.F
-        Nneg, Npos = self.Nneg, self.Npos
-        Kf__ = self.Kf__
-        idxREce_, idxIMce_ = self.idxREce_, self.idxIMce_
-        idxREceneg_, idxREcepos_ = idxREce_[:Nneg], idxREce_[-Npos:]
-        idxIMceneg_, idxIMcepos_ = idxIMce_[:Nneg], idxIMce_[-Npos:]
-        idxREjintneg_, idxREjintpos_ = self.idxREjintneg_, self.idxREjintpos_
-        idxREjDLneg_, idxREjDLpos_   = self.idxREjDLneg_, self.idxREjDLpos_
-        idxIMjintneg_, idxIMjintpos_ = self.idxIMjintneg_, self.idxIMjintpos_
-        idxIMjDLneg_, idxIMjDLpos_   = self.idxIMjDLneg_, self.idxIMjDLpos_
-        Kf__[idxREceneg_, idxREjintneg_] = \
-        Kf__[idxREceneg_, idxREjDLneg_]  = \
-        Kf__[idxIMceneg_, idxIMjintneg_] = \
-        Kf__[idxIMceneg_, idxIMjDLneg_] = n = -self.Δxneg*a
-        Kf__[idxREcepos_, idxREjintpos_] = \
-        Kf__[idxREcepos_, idxREjDLpos_]  = \
-        Kf__[idxIMcepos_, idxIMjintpos_] = \
-        Kf__[idxIMcepos_, idxIMjDLpos_] = -self.Δxpos*a
+        ravelKf_ = self.ravelKf_
+        sKf = self.sKf
+        ravelKf_[sKf.sr_REceneg_REjintneg] = \
+        ravelKf_[sKf.sr_REceneg_REjDLneg ]  = \
+        ravelKf_[sKf.sr_IMceneg_IMjintneg] = \
+        ravelKf_[sKf.sr_IMceneg_IMjDLneg ] = n = -self.Δxneg*a
+        ravelKf_[sKf.sr_REcepos_REjintpos] = \
+        ravelKf_[sKf.sr_REcepos_REjDLpos ]  = \
+        ravelKf_[sKf.sr_IMcepos_IMjintpos] = \
+        ravelKf_[sKf.sr_IMcepos_IMjDLpos ] = -self.Δxpos*a
         if self.lithiumPlating:
-            Kf__[idxREceneg_, self.idxREjLP_] = \
-            Kf__[idxIMceneg_, self.idxIMjLP_] = n
+            ravelKf_[sKf.sr_REceneg_REjLP] = \
+            ravelKf_[sKf.sr_IMceneg_IMjLP] = n
 
-    def update_bKf_idxREφsneg_0_and_idxREφspos_end(self, σeffneg, σeffpos):
+    def update_bKf_REφsneg0_and_REφsposEnd(self, σeffneg, σeffpos):
         bKf_ = self.bKf_
         ΔiAC = self.ΔiAC
+        sKf = self.sKf
         # 更新bKf_向量REφsneg首元
-        bKf_[self.idxREφsneg_[0]] = -self.Δxneg*ΔiAC/σeffneg
+        bKf_[sKf.s_REφsneg.start]    = -self.Δxneg*ΔiAC/σeffneg
         # 更新bKf_向量REφspos末元
-        bKf_[self.idxREφspos_[-1]] = self.Δxpos*ΔiAC/σeffpos
+        bKf_[sKf.s_REφspos.stop - 1] = self.Δxpos*ΔiAC/σeffpos
 
     def EIS(self):
         """计算电化学阻抗谱"""
         tEIS = self.t     # 读取：当前时刻 [s]
-        data = self.data  # 读取：数据字典
-        if data['tEIS'] and data['tEIS'][-1]==tEIS:
+        if (tEIS_ := self.data['tEIS']) and tEIS_[-1:]==tEIS:
             if self.verbose:
                 print(f'已计算时刻{tEIS = } s 电化学阻抗谱')
             return self
-        # 频域因变量索引
-        idxREcsnegsurf_, idxIMcsnegsurf_ = self.idxREcsnegsurf_, self.idxIMcsnegsurf_
-        idxREcspossurf_, idxIMcspossurf_ = self.idxREcspossurf_, self.idxIMcspossurf_
-        idxREce_, idxIMce_ = self.idxREce_, self.idxIMce_
-        idxREφsneg_, idxIMφsneg_ = self.idxREφsneg_, self.idxIMφsneg_
-        idxREφspos_, idxIMφspos_ = self.idxREφspos_, self.idxIMφspos_
-        idxREφe_, idxIMφe_ = self.idxREφe_, self.idxIMφe_
-        idxREjintneg_, idxIMjintneg_ = self.idxREjintneg_, self.idxIMjintneg_
-        idxREjintpos_, idxIMjintpos_ = self.idxREjintpos_, self.idxIMjintpos_
-        idxREjDLneg_, idxIMjDLneg_ = self.idxREjDLneg_, self.idxIMjDLneg_
-        idxREjDLpos_, idxIMjDLpos_ = self.idxREjDLpos_, self.idxIMjDLpos_
-        idxREi0intneg_, idxIMi0intneg_ = self.idxREi0intneg_, self.idxIMi0intneg_
-        idxREi0intpos_, idxIMi0intpos_ = self.idxREi0intpos_, self.idxIMi0intpos_
-        idxREηintneg_, idxIMηintneg_ = self.idxREηintneg_, self.idxIMηintneg_
-        idxREηintpos_, idxIMηintpos_ = self.idxREηintpos_, self.idxIMηintpos_
-        REIMi0intnegUnknown = idxREi0intneg_.size > 0
-        REIMi0intposUnknown = idxREi0intpos_.size > 0
+        REIMi0intnegUnknown = self._i0intneg is None
+        REIMi0intposUnknown = self._i0intpos is None
         lithiumPlating = self.lithiumPlating
 
-        solve_banded_matrix = DFNP2D.solve_banded_matrix
-        Nneg, Nsep, Npos = self.Nneg, self.Nsep, self.Npos            # 读取：网格数
+        # 读取参数
+        solve_banded_matrix = P2Dbase.solve_banded_matrix
+        Nneg, Nsep, Npos, Ne = self.Nneg, self.Nsep, self.Npos, self.Ne  # 读取：网格数
         ΔxWest_, ΔxEast_, Δx_ = self.ΔxWest_, self.ΔxEast_, self.Δx_  # 读取：网格距离 [m]
         ΔiAC, ΔIAC = self.ΔiAC, self.ΔIAC
         Δxneg, Δxpos = self.Δxneg, self.Δxpos
@@ -164,125 +137,104 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         κDeffWest_ = κDeffEast_ = self.κDeff_
         DeeffWest_ = DeeffEast_ = self.Deeff_
 
+        if self.ravelKf_ is None:
+            self._generate_Kf__bKf_and_slices()
+            self.update_Kf__with_pure_electrochemical_parameters()
+
+        ravelKf_ = self.ravelKf_  # 频域因变量矩阵Kf__展平视图
+        bKf_ = self.bKf_          # 常数项向量
+        Kf__ = ravelKf_.base
+
         if self.constants:
             cache = self.frequency_dependent_cache
         else:
             cache = self.solve_frequency_dependent_variables()
-            κeffWest_ = κeffEast_ = self.κeff_
-            self.update_Kf__idxREce_idxREce_and_idxIMce_idxIMce_(DeeffWest_, DeeffEast_)
-            self.update_Kf__idxREce_idxREj_and_idxIMce_idxIMj_(self.tplus)
-            self.update_Kf__idxREφsneg_idxREjneg_and_idxIMφsneg_idxIMjneg_(σeffneg)
-            self.update_Kf__idxREφspos_idxREjpos_and_idxIMφspos_idxIMjpos_(σeffpos)
-            self.update_bKf_idxREφsneg_0_and_idxREφspos_end(σeffneg, σeffpos)
-            self.update_Kf__idxREφe_idxREφe_and_idxIMφe_idxIMφe_(κeffWest_, κeffEast_)
-            self.update_Kf__idxREηintneg_idxREjneg_and_idxIMηintneg_idxIMjneg_(self.RSEIneg, self.aeffneg)
-            self.update_Kf__idxREηintpos_idxREjpos_and_idxIMηintpos_idxIMjpos_(self.RSEIpos, self.aeffpos)
-            if lithiumPlating:
-                self.update_Kf__idxREηLP_idxREjneg_and_idxIMηLP_idxIMjneg_(self.RSEIneg, self.aeffneg)
+            self.update_Kf__with_pure_electrochemical_parameters()
 
-        ce_ = self.ce_  # 读取：电解液锂离子浓度场 [mol/m^3]
-        ceInterfaces_ = self.ceInterfaces_
-        ceWest_ = ceInterfaces_[:-1]  # (Ne,) 各控制体左界面的电解液锂离子浓度 [mol/m^3]
-        ceEast_ = ceInterfaces_[1:]   # (Ne,) 各控制体右界面的电解液锂离子浓度 [mol/m^3]
-        gradceWest_ = hstack([0, (ce_[1:] - ce_[:-1])/ΔxWest_[1:]])   # (Ne,) 各控制体左界面的锂离子浓度梯度 [mol/m^4]
-        gradceEast_ = hstack([(ce_[1:] - ce_[:-1])/ΔxEast_[:-1], 0])  # (Ne,) 各控制体右界面的锂离子浓度梯度 [mol/m^4]
-        for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
-            # 修正负极-隔膜界面、隔膜-正极界面
-            gradceEast_[nW] = (ceEast_[nW] - ce_[nW])/(0.5*Δx_[nW])
-            gradceWest_[nE] = (ce_[nE] - ceWest_[nE])/(0.5*Δx_[nE])
-
-        Kf__ = self.Kf__  # 频域因变量矩阵
-        bKf_ = self.bKf_  # b向量
+        # 索引Kf__矩阵频率相关值
+        sKf = self.sKf
+        ravelKf_REcsnegsurf_REjintneg_ = ravelKf_[sKf.sr_REcsnegsurf_REjintneg]
+        ravelKf_REcsnegsurf_IMjintneg_ = ravelKf_[sKf.sr_REcsnegsurf_IMjintneg]
+        ravelKf_IMcsnegsurf_REjintneg_ = ravelKf_[sKf.sr_IMcsnegsurf_REjintneg]
+        ravelKf_IMcsnegsurf_IMjintneg_ = ravelKf_[sKf.sr_IMcsnegsurf_IMjintneg]
+        ravelKf_REcspossurf_REjintpos_ = ravelKf_[sKf.sr_REcspossurf_REjintpos]
+        ravelKf_REcspossurf_IMjintpos_ = ravelKf_[sKf.sr_REcspossurf_IMjintpos]
+        ravelKf_IMcspossurf_REjintpos_ = ravelKf_[sKf.sr_IMcspossurf_REjintpos]
+        ravelKf_IMcspossurf_IMjintpos_ = ravelKf_[sKf.sr_IMcspossurf_IMjintpos]
+        ravelKf_REce_IMce_ = ravelKf_[sKf.sr_REce_IMce]
+        ravelKf_IMce_REce_ = ravelKf_[sKf.sr_IMce_REce]
+        ravelKf_REjDLneg_IMφeneg_ = ravelKf_[sKf.sr_REjDLneg_IMφeneg]
+        ravelKf_REjDLneg_IMφsneg_ = ravelKf_[sKf.sr_REjDLneg_IMφsneg]
+        ravelKf_REjDLneg_IMjintneg_ = ravelKf_[sKf.sr_REjDLneg_IMjintneg]
+        ravelKf_REjDLneg_IMjDLneg_ = ravelKf_[sKf.sr_REjDLneg_IMjDLneg]
+        ravelKf_IMjDLneg_REφeneg_ = ravelKf_[sKf.sr_IMjDLneg_REφeneg]
+        ravelKf_IMjDLneg_REφsneg_ = ravelKf_[sKf.sr_IMjDLneg_REφsneg]
+        ravelKf_IMjDLneg_REjintneg_ = ravelKf_[sKf.sr_IMjDLneg_REjintneg]
+        ravelKf_IMjDLneg_REjDLneg_ = ravelKf_[sKf.sr_IMjDLneg_REjDLneg]
+        ravelKf_REjDLpos_IMφepos_ = ravelKf_[sKf.sr_REjDLpos_IMφepos]
+        ravelKf_REjDLpos_IMφspos_ = ravelKf_[sKf.sr_REjDLpos_IMφspos]
+        ravelKf_REjDLpos_IMjintpos_ = ravelKf_[sKf.sr_REjDLpos_IMjintpos]
+        ravelKf_REjDLpos_IMjDLpos_ = ravelKf_[sKf.sr_REjDLpos_IMjDLpos]
+        ravelKf_IMjDLpos_REφepos_ = ravelKf_[sKf.sr_IMjDLpos_REφepos]
+        ravelKf_IMjDLpos_REφspos_ = ravelKf_[sKf.sr_IMjDLpos_REφspos]
+        ravelKf_IMjDLpos_REjintpos_ = ravelKf_[sKf.sr_IMjDLpos_REjintpos]
+        ravelKf_IMjDLpos_REjDLpos_ = ravelKf_[sKf.sr_IMjDLpos_REjDLpos]
+        if lithiumPlating:
+            ravelKf_REjDLneg_IMjLP_ = ravelKf_[sKf.sr_REjDLneg_IMjLP]
+            ravelKf_IMjDLneg_REjLP_ = ravelKf_[sKf.sr_IMjDLneg_REjLP]
 
         ## 对Kf__矩阵赋时变值 ##
 
-        # 电解液电势实部REφe行REce列
-        a = κDeffEast_[0]/ceEast_[0]/ΔxEast_[0]
-        aa = (κDeffEast_[0]*gradceEast_[0]/ceEast_[0]**2)/2
-        Kf__[idxREφe_[0], idxREce_[:2]] = [a + aa, -a + aa]  # 首行
-        a = κDeffWest_[-1]/ceWest_[-1]/ΔxWest_[-1]
-        aa = (-κDeffWest_[-1]*gradceWest_[-1]/ceWest_[-1]**2)/2
-        Kf__[idxREφe_[-1], idxREce_[-2:]] = [-a + aa, a + aa]  # 末行
-        a_ = -κDeffWest_[1:-1]/ceWest_[1:-1]/ΔxWest_[1:-1]
-        c_ = -κDeffEast_[1:-1]/ceEast_[1:-1]/ΔxEast_[1:-1]
-        aa_ = (-κDeffWest_[1:-1]*gradceWest_[1:-1]/ceWest_[1:-1]**2)/2
-        cc_ = ( κDeffEast_[1:-1]*gradceEast_[1:-1]/ceEast_[1:-1]**2)/2
-        Kf__[idxREφe_[1:-1], idxREce_[:-2]] = a_ + aa_
-        Kf__[idxREφe_[1:-1], idxREce_[2:]]  = c_ + cc_
-        Kf__[idxREφe_[1:-1], idxREce_[1:-1]] = -(a_ + c_) + aa_ + cc_
-        # 修正负极-隔膜界面、隔膜-正极界面
-        for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
-            pDW = DeeffEast_[nW]*Δx_[nE] / (DeeffWest_[nE]*Δx_[nW] + DeeffEast_[nW]*Δx_[nE])
-            pDE = 1 - pDW  # 即：DeeffWest_[nE]*Δx_[nW] / (DeeffWest_[nE]*Δx_[nW] + DeeffEast_[nW]*Δx_[nE])
-            # 界面左侧控制体
-            a = -κDeffWest_[nW]/ceWest_[nW]/ΔxWest_[nW]
-            aa = (-κDeffWest_[nW]*gradceWest_[nW]/ceWest_[nW]**2)/2
-            c = -2*κDeffEast_[nW]*DeeffWest_[nE] / ceEast_[nW] / (DeeffWest_[nE]*Δx_[nW] + DeeffEast_[nW]*Δx_[nE])
-            cc = κDeffEast_[nW]*gradceEast_[nW]/ceEast_[nW]**2
-            Kf__[idxREφe_[nW], idxREce_[nW-1:nW+2]] = [a + aa,
-                                                       -(a + c) + aa + cc*pDW,
-                                                       c + cc*pDE]
-            # 界面右侧控制体
-            a = -2*κDeffWest_[nE]*DeeffEast_[nW] / ceWest_[nE] / (DeeffWest_[nE]*Δx_[nW] + DeeffEast_[nW]*Δx_[nE])
-            aa = -κDeffWest_[nE]*gradceWest_[nE]/ceWest_[nE]**2
-            c = -κDeffEast_[nE]/ceEast_[nE]/ΔxEast_[nE]
-            cc = (κDeffEast_[nE]*gradceEast_[nE]/ceEast_[nE]**2)/2
-            Kf__[idxREφe_[nE], idxREce_[nE-1:nE+2]] = [a + aa*pDW ,
-                                                       -(a + c) + aa*pDE + cc,
-                                                       c + cc]
-        # 电解液电势虚部IMφe行
-        Kf__[idxIMφe_, idxIMce_] = Kf__[idxREφe_, idxREce_]                    # IMce列主对角线
-        Kf__[idxIMφe_[1:], idxIMce_[:-1]] = Kf__[idxREφe_[1:], idxREce_[:-1]]  # IMce列下对角线
-        Kf__[idxIMφe_[:-1], idxIMce_[1:]] = Kf__[idxREφe_[:-1], idxREce_[1:]]  # IMce列上对角线
+        self.update_Kf__REφe_REce_and_IMφe_IMce_(
+            κDeffWest_, κDeffEast_,
+            DeeffWest_, DeeffEast_,
+            self.ce_, self.ceInterfaces_)
 
         # 负极主反应局部体积电流密度实部REjintneg行、虚部IMjintneg行
-        Kf__[idxREjintneg_, idxREηintneg_] = \
-        Kf__[idxIMjintneg_, idxIMηintneg_] = -self.djintdηintneg_  # REIMηintneg列
         if REIMi0intnegUnknown:
-            Kf__[idxREjintneg_, idxREi0intneg_] = \
-            Kf__[idxIMjintneg_, idxIMi0intneg_] = -self.djintdi0intneg_  # REIMi0intneg列
-        # 正极局部体积电流密度实部REjintpos行、虚部IMjintpos行
-        Kf__[idxREjintpos_, idxREηintpos_] = \
-        Kf__[idxIMjintpos_, idxIMηintpos_] = -self.djintdηintpos_  # IMηintpos列
+            ravelKf_[sKf.sr_REjintneg_REi0intneg] = \
+            ravelKf_[sKf.sr_IMjintneg_IMi0intneg] = -self.djintdi0intneg_  # REIMi0intneg列
+        ravelKf_[sKf.sr_REjintneg_REηintneg] = \
+        ravelKf_[sKf.sr_IMjintneg_IMηintneg] = -self.djintdηintneg_        # REIMηintneg列
         if REIMi0intposUnknown:
-            Kf__[idxREjintpos_, idxREi0intpos_] = \
-            Kf__[idxIMjintpos_, idxIMi0intpos_] = -self.djintdi0intpos_  # IMi0intpos列
+            ravelKf_[sKf.sr_REjintpos_REi0intpos] = \
+            ravelKf_[sKf.sr_IMjintpos_IMi0intpos] = -self.djintdi0intpos_  # IMi0intpos列
+        # 正极局部体积电流密度实部REjintpos行、虚部IMjintpos行
+        ravelKf_[sKf.sr_REjintpos_REηintpos] = \
+        ravelKf_[sKf.sr_IMjintpos_IMηintpos] = -self.djintdηintpos_  # IMηintpos列
 
         if REIMi0intnegUnknown:
             # 负极交换电流密度实部REi0intneg行、虚部IMi0intneg行
-            Kf__[idxREi0intneg_, idxREce_[:Nneg]] = \
-            Kf__[idxIMi0intneg_, idxIMce_[:Nneg]] = -self.di0intdceneg_      # REIMce列
-            Kf__[idxREi0intneg_, idxREcsnegsurf_] = \
-            Kf__[idxIMi0intneg_, idxIMcsnegsurf_] = -self.di0intdcsnegsurf_  # REIMcsnegsurf列
+            ravelKf_[sKf.sr_REi0intneg_REcsnegsurf] = \
+            ravelKf_[sKf.sr_IMi0intneg_IMcsnegsurf] = -self.di0intdcsnegsurf_  # REIMcsnegsurf列
+            ravelKf_[sKf.sr_REi0intneg_REceneg] = \
+            ravelKf_[sKf.sr_IMi0intneg_IMceneg] = -self.di0intdceneg_          # REIMce列
 
         if REIMi0intposUnknown:
             # 正极交换电流密度实部REi0intpos行、虚部IMi0intpos行
-            Kf__[idxREi0intpos_, idxREce_[-Npos:]] = \
-            Kf__[idxIMi0intpos_, idxIMce_[-Npos:]] = -self.di0intdcepos_     # REIMce列
-            Kf__[idxREi0intpos_, idxREcspossurf_] = \
-            Kf__[idxIMi0intpos_, idxIMcspossurf_] = -self.di0intdcspossurf_  # REIMcsnegsurf列
+            ravelKf_[sKf.sr_REi0intpos_REcspossurf] = \
+            ravelKf_[sKf.sr_IMi0intpos_IMcspossurf] = -self.di0intdcspossurf_  # REIMcsnegsurf列
+            ravelKf_[sKf.sr_REi0intpos_REcepos] = \
+            ravelKf_[sKf.sr_IMi0intpos_IMcepos] = -self.di0intdcepos_          # REIMce列
 
         # 负极过电位实部REηintneg行REcsnegsurf列、虚部IMηintneg行IMcsnegsurf列
-        Kf__[idxREηintneg_, idxREcsnegsurf_] = \
-        Kf__[idxIMηintneg_, idxIMcsnegsurf_] = self.dUOCPdcsnegsurf_
+        ravelKf_[sKf.sr_REηintneg_REcsnegsurf] = \
+        ravelKf_[sKf.sr_IMηintneg_IMcsnegsurf] = self.dUOCPdcsnegsurf_
         # 正极过电位实部REηintpos行REcspossurf列、虚部IMηintpos行IMcsnegsurf列
-        Kf__[idxREηintpos_, idxREcspossurf_] = \
-        Kf__[idxIMηintpos_, idxIMcspossurf_] = self.dUOCPdcspossurf_
+        ravelKf_[sKf.sr_REηintpos_REcspossurf] = \
+        ravelKf_[sKf.sr_IMηintpos_IMcspossurf] = self.dUOCPdcspossurf_
 
         if lithiumPlating:
             # 析锂补充
-            idxREjLP_, idxIMjLP_ = self.idxREjLP_, self.idxIMjLP_
-            idxREηLP_, idxIMηLP_ = self.idxREηLP_, self.idxIMηLP_
-            # 析锂局部体积电流密度实部REjLP行REηLP列、虚部IMjLP行IMηLP列
-            Kf__[idxREjLP_, idxREηLP_] = \
-            Kf__[idxIMjLP_, idxIMηLP_] = -self.djLPdηLP_  # IMηLP列
             # 析锂局部体积电流实部REJLP行REθeneg列、虚部IMJLP行IMθeneg列
-            Kf__[idxREjLP_, idxREce_[:Nneg]] = \
-            Kf__[idxIMjLP_, idxIMce_[:Nneg]] = -self.djLPdce_
+            ravelKf_[sKf.sr_REjLP_REceneg] = \
+            ravelKf_[sKf.sr_IMjLP_IMceneg] = -self.djLPdce_
+            # 析锂局部体积电流密度实部REjLP行REηLP列、虚部IMjLP行IMηLP列
+            ravelKf_[sKf.sr_REjLP_REηLP] = \
+            ravelKf_[sKf.sr_IMjLP_IMηLP] = -self.djLPdηLP_  # IMηLP列
 
         Nf = self.f_.size
         X__ = empty((Nf, bKf_.shape[0]), dtype=bKf_.dtype)
-
         for nf, (ωεeΔx_,
              ωaCDLneg, ωaCDLpos,
              ωCDLRSEIneg, ωCDLRSEIpos,
@@ -294,68 +246,63 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             ## 遍历所有频率f ##
 
             # 负极固相表面浓度实部REcsnegsurf行
-            Kf__[idxREcsnegsurf_, idxREjintneg_] = minusKcsnegsurf__[0, 0]  # REjintneg列
-            Kf__[idxREcsnegsurf_, idxIMjintneg_] = minusKcsnegsurf__[0, 1]  # IMjintneg列
+            ravelKf_REcsnegsurf_REjintneg_[:] = minusKcsnegsurf__[0, 0]  # REjintneg列
+            ravelKf_REcsnegsurf_IMjintneg_[:] = minusKcsnegsurf__[0, 1]  # IMjintneg列
             # 负极固相表面浓度虚部IMcsnegsurf行
-            Kf__[idxIMcsnegsurf_, idxREjintneg_] = minusKcsnegsurf__[1, 0]  # REjintneg列
-            Kf__[idxIMcsnegsurf_, idxIMjintneg_] = minusKcsnegsurf__[1, 1]  # IMjintneg列
+            ravelKf_IMcsnegsurf_REjintneg_[:] = minusKcsnegsurf__[1, 0]  # REjintneg列
+            ravelKf_IMcsnegsurf_IMjintneg_[:] = minusKcsnegsurf__[1, 1]  # IMjintneg列
             # 正极固相表面浓度实部REcspossurf行
-            Kf__[idxREcspossurf_, idxREjintpos_] = minusKcspossurf__[0, 0]  # REjintpos列
-            Kf__[idxREcspossurf_, idxIMjintpos_] = minusKcspossurf__[0, 1]  # IMjintpos列
+            ravelKf_REcspossurf_REjintpos_[:] = minusKcspossurf__[0, 0]  # REjintpos列
+            ravelKf_REcspossurf_IMjintpos_[:] = minusKcspossurf__[0, 1]  # IMjintpos列
             # 正极固相表面浓度虚部IMcspossurf行
-            Kf__[idxIMcspossurf_, idxREjintpos_] = minusKcspossurf__[1, 0]  # REjintpos列
-            Kf__[idxIMcspossurf_, idxIMjintpos_] = minusKcspossurf__[1, 1]  # IMjintpos列
+            ravelKf_IMcspossurf_REjintpos_[:] = minusKcspossurf__[1, 0]  # REjintpos列
+            ravelKf_IMcspossurf_IMjintpos_[:] = minusKcspossurf__[1, 1]  # IMjintpos列
 
-            Kf__[idxREce_, idxIMce_] = -ωεeΔx_  # REce行IMce列
-            Kf__[idxIMce_, idxREce_] = ωεeΔx_   # IMce行REce列
+            ravelKf_REce_IMce_[:] = -ωεeΔx_  # REce行IMce列
+            ravelKf_IMce_REce_[:] =  ωεeΔx_   # IMce行REce列
 
             # 负极双电层局部体积电流密度实部REjDLneg行
-            Kf__[idxREjDLneg_, idxIMφe_[:Nneg]] = -ωaCDLneg   # IMφe负极列
-            Kf__[idxREjDLneg_, idxIMφsneg_] = ωaCDLneg        # IMφsneg列
-            Kf__[idxREjDLneg_, idxIMjintneg_] = \
-            Kf__[idxREjDLneg_, idxIMjDLneg_] = -ωCDLRSEIneg   # IMjintneg列、IMjDLneg列
+            ravelKf_REjDLneg_IMφeneg_[:] = -ωaCDLneg   # IMφeneg列
+            ravelKf_REjDLneg_IMφsneg_[:] = ωaCDLneg    # IMφsneg列
+            ravelKf_REjDLneg_IMjintneg_[:] = \
+            ravelKf_REjDLneg_IMjDLneg_[:] = -ωCDLRSEIneg  # IMjintneg列、IMjDLneg列
             # 负极双电层局部体积电流密度虚部IMjDLneg行
-            Kf__[idxIMjDLneg_, idxREφe_[:Nneg]] = ωaCDLneg    # REφe负极列
-            Kf__[idxIMjDLneg_, idxREφsneg_] = -ωaCDLneg       # REφsneg列
-            Kf__[idxIMjDLneg_, idxREjintneg_] = \
-            Kf__[idxIMjDLneg_, idxREjDLneg_]  = ωCDLRSEIneg   # REjintneg列、REjDLneg列
+            ravelKf_IMjDLneg_REφeneg_[:] = ωaCDLneg       # REφeneg列
+            ravelKf_IMjDLneg_REφsneg_[:] = -ωaCDLneg      # REφsneg列
+            ravelKf_IMjDLneg_REjintneg_[:] = \
+            ravelKf_IMjDLneg_REjDLneg_[:] = ωCDLRSEIneg  # REjintneg列、REjDLneg列
             # 正极双电层局部体积电流密度实部REjDLpos行
-            Kf__[idxREjDLpos_, idxIMφe_[-Npos:]] = -ωaCDLpos  # IMφe正极列
-            Kf__[idxREjDLpos_, idxIMφspos_] = ωaCDLpos        # IMφspos列
-            Kf__[idxREjDLpos_, idxIMjintpos_] = \
-            Kf__[idxREjDLpos_, idxIMjDLpos_] = -ωCDLRSEIpos   # IMjintpos列、IMjDLpos列
+            ravelKf_REjDLpos_IMφepos_[:] = -ωaCDLpos       # IMφepos列
+            ravelKf_REjDLpos_IMφspos_[:] = ωaCDLpos        # IMφspos列
+            ravelKf_REjDLpos_IMjintpos_[:] = \
+            ravelKf_REjDLpos_IMjDLpos_[:] = -ωCDLRSEIpos  # IMjintpos列、IMjDLpos列
             # 正极双电层局部体积电流密度虚部IMjDLpos行
-            Kf__[idxIMjDLpos_, idxREφe_[-Npos:]] = ωaCDLpos  # REφe正极列
-            Kf__[idxIMjDLpos_, idxREφspos_] = -ωaCDLpos      # REφspos列
-            Kf__[idxIMjDLpos_, idxREjintpos_] = \
-            Kf__[idxIMjDLpos_, idxREjDLpos_] = ωCDLRSEIpos   # REjintpos列、REjDLpos列
+            ravelKf_IMjDLpos_REφepos_[:] = ωaCDLpos       # REφepos列
+            ravelKf_IMjDLpos_REφspos_[:] = -ωaCDLpos      # REφspos列
+            ravelKf_IMjDLpos_REjintpos_[:] = \
+            ravelKf_IMjDLpos_REjDLpos_[:] = ωCDLRSEIpos  # REjintpos列、REjDLpos列
 
             if lithiumPlating:
                 # 补充
-                Kf__[idxREjDLneg_, idxIMjLP_] = -ωCDLRSEIneg  # REjDLneg行IMjLP列
-                Kf__[idxIMjDLneg_, idxREjLP_] =  ωCDLRSEIneg  # IMjDLneg行REjLP列
+                ravelKf_REjDLneg_IMjLP_[:] = -ωCDLRSEIneg  # REjDLneg行IMjLP列
+                ravelKf_IMjDLneg_REjLP_[:] =  ωCDLRSEIneg  # IMjDLneg行REjLP列
 
-            if (self.bandwidthsKf_ is None) and any(self.data['I']):
-                if verbose := self.verbose:
-                    print('辨识重排频域因变量Kf__矩阵的带宽 -> ', end='')
-                self.idxKfReordered_ = idxKfReordered_ = reverse_cuthill_mckee(csr_matrix(Kf__))
-                self.idxKfRecovered_ = idxKfReordered_.argsort()
-                self.bandwidthsKf_ = DFNP2D.identify_bandwidths(Kf__[ix_(idxKfReordered_, idxKfReordered_)])
-                if verbose:
-                    print(f'上带宽{self.bandwidthsKf_['upper']}，下带宽{self.bandwidthsKf_['lower']}')
+            if (self.banded_experience_of_Kf__ is None) and any(self.data['I']):
+                self.banded_experience_of_Kf__ = expe = P2Dbase.banded_experience(Kf__)
+                if self.verbose:
+                    print(f'重排频域因变量矩阵Kf__的下带宽{expe['l']}，上带宽{expe['u']}')
 
-            if bandwidthsKf_ := self.bandwidthsKf_:
+            if expe := self.banded_experience_of_Kf__:
                 # 带状化求解
-                X__[nf] = solve_banded_matrix(Kf__, bKf_,
-                    self.idxKfReordered_, self.idxKfRecovered_, bandwidthsKf_)
+                X__[nf] = solve_banded_matrix(Kf__, bKf_, **expe)
             else:
                 # 直接求解
                 X__[nf] = solve(Kf__, bKf_)
 
-        REφsneg__ = X__[:, idxREφsneg_]  # 负极固相电势实部
-        IMφsneg__ = X__[:, idxIMφsneg_]  # 负极固相电势虚部
-        REφspos__ = X__[:, idxREφspos_]  # 正极固相电势实部
-        IMφspos__ = X__[:, idxIMφspos_]  # 正极固相电势虚部
+        REφsneg__ = X__[:, sKf.s_REφsneg]  # 负极固相电势实部
+        IMφsneg__ = X__[:, sKf.s_IMφsneg]  # 负极固相电势虚部
+        REφspos__ = X__[:, sKf.s_REφspos]  # 正极固相电势实部
+        IMφspos__ = X__[:, sKf.s_IMφspos]  # 正极固相电势虚部
 
         self.tEIS = tEIS
         REφsnegCollector_ = REφsneg__[:, 0] + 0.5*Δxneg*ΔiAC/σeffneg   # (Nf,) 负极集流体电势实部 [V]
@@ -367,39 +314,39 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         self.Z_[:] = Zreal_ + 1j*Zimag_ + self.Zl_
 
         if self.complete:
-            self.REcsnegsurf__[:] = X__[:, idxREcsnegsurf_]  # 负极固相表面浓度实部
-            self.IMcsnegsurf__[:] = X__[:, idxIMcsnegsurf_]  # 负极固相表面浓度虚部
-            self.REcspossurf__[:] = X__[:, idxREcspossurf_]  # 正极固相表面浓度实部
-            self.IMcspossurf__[:] = X__[:, idxIMcspossurf_]  # 正极固相表面浓度虚部
-            self.REce__[:] = X__[:, idxREce_]  # 电解液锂离子浓度实部
-            self.IMce__[:] = X__[:, idxIMce_]  # 电解液锂离子浓度虚部
+            self.REcsnegsurf__[:] = X__[:, sKf.s_REcsnegsurf]  # 负极固相表面浓度实部
+            self.IMcsnegsurf__[:] = X__[:, sKf.s_IMcsnegsurf]  # 负极固相表面浓度虚部
+            self.REcspossurf__[:] = X__[:, sKf.s_REcspossurf]  # 正极固相表面浓度实部
+            self.IMcspossurf__[:] = X__[:, sKf.s_IMcspossurf]  # 正极固相表面浓度虚部
+            self.REce__[:] = X__[:, sKf.s_REce]  # 电解液锂离子浓度实部
+            self.IMce__[:] = X__[:, sKf.s_IMce]  # 电解液锂离子浓度虚部
             self.REφsneg__[:] = REφsneg__      # 负极固相电势实部
             self.IMφsneg__[:] = IMφsneg__      # 负极固相电势虚部
             self.REφspos__[:] = REφspos__      # 正极固相电势实部
             self.IMφspos__[:] = IMφspos__      # 正极固相电势虚部
-            self.REφe__[:] = REφe__ = X__[:, idxREφe_]  # 电解液电势实部
-            self.IMφe__[:] = IMφe__ = X__[:, idxIMφe_]  # 电解液电势虚部
-            self.REjintneg__[:] = X__[:, idxREjintneg_]  # 负极主反应局部体积电流密度实部
-            self.IMjintneg__[:] = X__[:, idxIMjintneg_]  # 负极主反应局部体积电流密度虚部
-            self.REjintpos__[:] = X__[:, idxREjintpos_]  # 正极主反应局部体积电流密度实部
-            self.IMjintpos__[:] = X__[:, idxIMjintpos_]  # 正极主反应局部体积电流密度虚部
-            self.REjDLneg__[:] = X__[:, idxREjDLneg_]  # 负极双电层局部体积电流密度实部
-            self.IMjDLneg__[:] = X__[:, idxIMjDLneg_]  # 负极双电层局部体积电流密度虚部
-            self.REjDLpos__[:] = X__[:, idxREjDLpos_]  # 正极双电层局部体积电流密度实部
-            self.IMjDLpos__[:] = X__[:, idxIMjDLpos_]  # 正极双电层局部体积电流密度虚部
-            self.REi0intneg__[:] = X__[:, idxREi0intneg_] if REIMi0intnegUnknown else 0. # 负极交换电流密度实部
-            self.IMi0intneg__[:] = X__[:, idxIMi0intneg_] if REIMi0intnegUnknown else 0. # 负极交换电流密度虚部
-            self.REi0intpos__[:] = X__[:, idxREi0intpos_] if REIMi0intposUnknown else 0. # 正极交换电流密度实部
-            self.IMi0intpos__[:] = X__[:, idxIMi0intpos_] if REIMi0intposUnknown else 0. # 正极交换电流密度虚部
-            self.REηintneg__[:] = X__[:, idxREηintneg_]  # 负极过电位实部
-            self.IMηintneg__[:] = X__[:, idxIMηintneg_]  # 负极过电位虚部
-            self.REηintpos__[:] = X__[:, idxREηintpos_]  # 正极过电位实部
-            self.IMηintpos__[:] = X__[:, idxIMηintpos_]  # 正极过电位虚部
+            self.REφe__[:] = REφe__ = X__[:, sKf.s_REφe]  # 电解液电势实部
+            self.IMφe__[:] = IMφe__ = X__[:, sKf.s_IMφe]  # 电解液电势虚部
+            self.REjintneg__[:] = X__[:, sKf.s_REjintneg]  # 负极主反应局部体积电流密度实部
+            self.IMjintneg__[:] = X__[:, sKf.s_IMjintneg]  # 负极主反应局部体积电流密度虚部
+            self.REjintpos__[:] = X__[:, sKf.s_REjintpos]  # 正极主反应局部体积电流密度实部
+            self.IMjintpos__[:] = X__[:, sKf.s_IMjintpos]  # 正极主反应局部体积电流密度虚部
+            self.REjDLneg__[:] = X__[:, sKf.s_REjDLneg]  # 负极双电层局部体积电流密度实部
+            self.IMjDLneg__[:] = X__[:, sKf.s_IMjDLneg]  # 负极双电层局部体积电流密度虚部
+            self.REjDLpos__[:] = X__[:, sKf.s_REjDLpos]  # 正极双电层局部体积电流密度实部
+            self.IMjDLpos__[:] = X__[:, sKf.s_IMjDLpos]  # 正极双电层局部体积电流密度虚部
+            self.REi0intneg__[:] = X__[:, sKf.s_REi0intneg] if REIMi0intnegUnknown else 0. # 负极交换电流密度实部
+            self.IMi0intneg__[:] = X__[:, sKf.s_IMi0intneg] if REIMi0intnegUnknown else 0. # 负极交换电流密度虚部
+            self.REi0intpos__[:] = X__[:, sKf.s_REi0intpos] if REIMi0intposUnknown else 0. # 正极交换电流密度实部
+            self.IMi0intpos__[:] = X__[:, sKf.s_IMi0intpos] if REIMi0intposUnknown else 0. # 正极交换电流密度虚部
+            self.REηintneg__[:] = X__[:, sKf.s_REηintneg]  # 负极过电位实部
+            self.IMηintneg__[:] = X__[:, sKf.s_IMηintneg]  # 负极过电位虚部
+            self.REηintpos__[:] = X__[:, sKf.s_REηintpos]  # 正极过电位实部
+            self.IMηintpos__[:] = X__[:, sKf.s_IMηintpos]  # 正极过电位虚部
             if lithiumPlating:
-                self.REjLP__[:] = X__[:, idxREjLP_]  # 负极析锂局部体积电流密度实部
-                self.IMjLP__[:] = X__[:, idxIMjLP_]  # 负极析锂局部体积电流密度虚部
-                self.REηLP__[:] = X__[:, idxREηLP_]  # 负极析锂过电位实部
-                self.IMηLP__[:] = X__[:, idxIMηLP_]  # 负极析锂过电位虚部
+                self.REjLP__[:] = X__[:, sKf.s_REjLP]  # 负极析锂局部体积电流密度实部
+                self.IMjLP__[:] = X__[:, sKf.s_IMjLP]  # 负极析锂局部体积电流密度虚部
+                self.REηLP__[:] = X__[:, sKf.s_REηLP]  # 负极析锂过电位实部
+                self.IMηLP__[:] = X__[:, sKf.s_IMηLP]  # 负极析锂过电位虚部
 
             nW, nE = Nneg - 1, Nneg
             κeffWest_ = κeffEast_ = self.κeff_
@@ -431,105 +378,111 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         return self.ΔIAC/self.A
 
     @staticmethod
-    def solve_Kcssurf__(
-            ω: float,   # 角频率 [rad/s]
-            Rs: float,  # 颗粒半径 [m]
-            Ds: float,  # 固相扩散系数 [m^2/s]
-            a: float,   # 比表面积 [m^2/m^3]
+    def solve_Kcssurf___(
+            ω_: ndarray,  # (Nf,) 角频率序列 [rad/s]
+            Rs: float,    # 颗粒半径 [m]
+            Ds: float,    # 固相扩散系数 [m^2/s]
+            a: float,     # 比表面积 [m^2/m^3]
             ):
-        """求Kcssurf__矩阵，Kcssurf__ @ [REj_, IMj_] = [REcssurf_, IMcssurf_]"""
-        W2 = ω*Rs**2/Ds
-        W = W2**0.5
-        root2 = 2**0.5
-        γ = root2/2*W
-        cosγ, sinγ = cos(γ), sin(γ)
-        # 处理大数运算
-        cosγ2, sinγ2 = Decimal(cosγ**2), Decimal(sinγ**2)
-        cosγsinγ = Decimal(cosγ*sinγ)
-        γ = Decimal(γ)
-        W, W2 = Decimal(W), Decimal(W2)
-        Rs = Decimal(Rs)
-        aFDs = Decimal(a*P2Dbase.F*Ds)
-        root2 = Decimal(root2)
-        expγ, exp_γ = γ.exp(), (-γ).exp()
-        coshγ = (expγ + exp_γ)/2
-        sinhγ = (expγ - exp_γ)/2
-        coshγ2 = coshγ**2
-        coshγsinhγ = coshγ*sinhγ
-        A = -root2*Rs*( W*coshγsinhγ
-                      + W*cosγsinγ
-                      + root2*cosγ2
-                      - root2*coshγ2)
-        B = -root2*W*Rs*(coshγsinhγ - cosγsinγ)
-        den = 2*aFDs*((W2 + 1)*coshγ2
-                      - root2*W*coshγsinhγ
-                      - W2*sinγ2
-                      - root2*W*cosγsinγ
-                      - cosγ2)
-        A /= den
-        B /= den
-        A, B = float(A), float(B)
-        Kcssurf__ = array([[A,  B],
-                              [-B, A]])
-        return Kcssurf__
+        """求Kcssurf___矩阵
+        Kcssurf___ @ stack([REjint__, IMjint__], axis=1) = stack([REcssurf__, IMcssurf__], axis=1)"""
+        W2_ = ω_*Rs**2/Ds
+        W_ = sqrt(W2_)
+        root2W_ = 1.4142135623730951*W_
+        γ_ = 0.7071067811865476*W_
+        cosγ_ = cos(γ_)
+        sinγ_ = sin(γ_)
+        cosγ2_ = cosγ_*cosγ_
+        sinγ2_ = sinγ_*sinγ_
+        cosγsinγ = cosγ_*sinγ_
+        aFDs = a * P2Dbase.F * Ds
+
+        # 指数缩放
+        # cosh²γ 和 coshγ·sinhγ 是 ~exp(2γ) 级别的大数，容易溢出，不能直接算
+        # 因此，把 cosh²γ、coshγ·sinhγ 全部乘 exp(-2γ)，转化成O(1)级别，防止溢出
+        exp_2γ_ = exp(-2*γ_)
+        m_ = 1 + exp_2γ_
+        coshγ2_s_ = 0.25*(m_*m_)                    # cosh²γ * exp(-2γ)
+        coshγsinhγ_s_ = 0.25*(1 - exp_2γ_*exp_2γ_)  # coshγ·sinhγ * exp(-2γ)
+
+        a_ = -Rs*root2W_ * (coshγsinhγ_s_ + cosγsinγ * exp_2γ_) + Rs*2 * (coshγ2_s_ - cosγ2_ * exp_2γ_)
+        b_ = -Rs*root2W_ * (coshγsinhγ_s_ - cosγsinγ * exp_2γ_)
+        d_ = 2*aFDs*((W2_ + 1) * coshγ2_s_
+                     - root2W_ * coshγsinhγ_s_
+                     - W2_     * sinγ2_   * exp_2γ_
+                     - root2W_ * cosγsinγ * exp_2γ_
+                     -           cosγ2_   * exp_2γ_)
+        a_ /= d_
+        b_ /= d_
+        Kcssurf___ = empty((ω_.size, 2, 2))
+        Kcssurf___[:, 0, 0] = Kcssurf___[:, 1, 1] = a_
+        Kcssurf___[:, 0, 1] = b_
+        Kcssurf___[:, 1, 0] = -b_
+        return Kcssurf___  # (Nf, 2, 2)
 
     @staticmethod
     def solve_REcs_IMcs(
-            r: float,   # 径向坐标 [m]
-            ω: float,   # 角频率 [rad/s]
+            r: float,      # 径向坐标 [m]
+            ω_: ndarray,   # (Nf,) 角频率序列 [rad/s]
             Rs: float,  # 颗粒半径 [m]
             Ds: float,  # 固相扩散系数 [m^2/s]
             a: float,   # 比表面积 [m^2/m^3]
-            REjint_: ndarray,
-            IMjint_: ndarray,
+            REjint__: ndarray,  # (Nf, Nreg) 主反应局部体积电流密度实部 [A/m^3]
+            IMjint__: ndarray,  # (Nf, Nreg) 主反应局部体积电流密度虚部 [A/m^3]
             ):
         """固相浓度实部、虚部在r处的解析解"""
-        root2 = 2**0.5
-        W2 = ω*Rs**2/Ds
-        W = W2**0.5
-        Y = r/Rs
-        γ = root2/2*W
-        γY = γ*Y
-        sinγY, cosγY = Decimal(sin(γY)), Decimal(cos(γY))
-        sinγ, cosγ   = Decimal(sin(γ)), Decimal(cos(γ))
-        # 处理大数运算
-        γY = Decimal(γY)
-        γ = Decimal(γ)
-        W, W2 =  Decimal(W), Decimal(W2)
-        Rs = Decimal(Rs)
-        aFDsr = Decimal(a*P2Dbase.F*Ds*r)
-        root2 = Decimal(root2)
+        Rs2 = Rs*Rs
+        W2_ = Rs2/Ds*ω_   # [–]
+        W_ = sqrt(W2_)    # [–]
+        root2W_ = 1.4142135623730951*W_
+        γ_ = 0.7071067811865476*W_ # [–]
+        γr_ = γ_*r/Rs  # [–]
+        sinγ_ = sin(γ_)
+        cosγ_ = cos(γ_)
+        sinγr_ = sin(γr_)
+        cosγr_ = cos(γr_)
+        aFDsr = a * P2Dbase.F * Ds * r
+        # 指数缩放
+        # coshγ coshγr sinhγ sinhγr 是 ~exp(γ) 级别的大数，容易溢出，不能直接算
+        # 应缩放：统一乘exp(-γ)
+        exp_γ_ = exp(-γ_)
+        exp_2γ_ = exp_γ_*exp_γ_
+        half_exp_2γ_ = 0.5*exp_2γ_
+        coshγ_s_ = 0.5 + half_exp_2γ_  # coshγ*exp(-γ_)
+        sinhγ_s_ = 0.5 - half_exp_2γ_  # sinhγ*exp(-γ_)
 
-        expγY, exp_γY = γY.exp(), (-γY).exp()
-        coshγY = (expγY + exp_γY)*0.5
-        sinhγY = (expγY - exp_γY)*0.5
-        expγ, exp_γ = γ.exp(), (-γ).exp()
-        coshγ = (expγ + exp_γ)*0.5
-        sinhγ = (expγ - exp_γ)*0.5
-        A = -root2*Rs**2*(  W*coshγY*sinγY*coshγ*cosγ
-                          - root2*coshγY*sinγY*coshγ*sinγ
-                          + W*coshγY*sinγY*sinhγ*sinγ
-                          + W*sinhγY*cosγY*coshγ*cosγ 
-                          - W*sinhγY*cosγY*sinhγ*sinγ
-                          - root2*sinhγY*cosγY*sinhγ*cosγ)
-        B = -root2*Rs**2*(- W*coshγY*sinγY*coshγ*cosγ
-                          + W*coshγY*sinγY*sinhγ*sinγ
-                          + root2*coshγY*sinγY*sinhγ*cosγ
-                          + W*sinhγY*cosγY*coshγ*cosγ
-                          - root2*sinhγY*cosγY*coshγ*sinγ
-                          + W*sinhγY*cosγY*sinhγ*sinγ)
-        den = 2*aFDsr*((W2 + 1)*coshγ**2
-                       - root2*W*coshγ*sinhγ
-                       - W2*sinγ**2
-                       - root2*W*cosγ*sinγ
-                       - cosγ**2)
-        A /= den
-        B /= den
-        A, B = float(A), float(B)
-        Kcs__ = array([[A,  B],
-                          [-B, A]])
-        REcs_, IMcs_ = Kcs__ @ [REjint_, IMjint_]
-        return REcs_, IMcs_
+        exp_γr_ = exp(-γr_)
+        q_ = exp(γ_*(r/Rs - 1))
+        p_ = exp_γ_*exp_γr_
+        coshγr_s_ = 0.5*(q_ + p_)  # coshγr*exp(-γ_)
+        sinhγr_s_ = 0.5*(q_ - p_)  # sinhγr*exp(-γ_)
+
+        a_ = Rs2*(- root2W_  * coshγr_s_ * sinγr_ * coshγ_s_ * cosγ_
+                  + 2        * coshγr_s_ * sinγr_ * coshγ_s_ * sinγ_
+                  - root2W_  * coshγr_s_ * sinγr_ * sinhγ_s_ * sinγ_
+                  - root2W_  * sinhγr_s_ * cosγr_ * coshγ_s_ * cosγ_
+                  + root2W_  * sinhγr_s_ * cosγr_ * sinhγ_s_ * sinγ_
+                  + 2        * sinhγr_s_ * cosγr_ * sinhγ_s_ * cosγ_)
+        b_ = Rs2*(  root2W_ * coshγ_s_ * sinγr_ * coshγ_s_ * cosγ_
+                  - root2W_ * coshγ_s_ * sinγr_ * sinhγ_s_ * sinγ_
+                  - 2       * coshγ_s_ * sinγr_ * sinhγ_s_ * cosγ_
+                  - root2W_ * sinhγ_s_ * cosγr_ * coshγ_s_ * cosγ_
+                  + 2       * sinhγ_s_ * cosγr_ * coshγ_s_ * sinγ_
+                  - root2W_ * sinhγ_s_ * cosγr_ * sinhγ_s_ * sinγ_)
+        d_ = 2*aFDsr*( (W2_ + 1) * coshγ_s_ * coshγ_s_
+                       - root2W_ * coshγ_s_ * sinhγ_s_
+                       - W2_     * sinγ_    * sinγ_ * exp_2γ_
+                       - root2W_ * cosγ_    * sinγ_ * exp_2γ_
+                       -           cosγ_    * cosγ_ * exp_2γ_)
+        a_ /= d_
+        b_ /= d_
+        Kcs___ = empty((ω_.size, 2, 2))
+        Kcs___[:, 0, 0] = Kcs___[:, 1, 1] = a_
+        Kcs___[:, 0, 1] = b_
+        Kcs___[:, 1, 0] = -b_
+        results___ = Kcs___ @ stack([REjint__, IMjint__], axis=1)  # (Nf, 2, Nreg)
+        REcs__, IMcs__ = results___[:, 0, :], results___[:, 1, :]
+        return REcs__, IMcs__  # (Nf, Nreg)
 
     @property
     def djintdi0intneg_(self):
@@ -652,7 +605,7 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             IMηLP__ = IMφsneg__ - IMφe__[:, :Nneg] - RSEI2aeffpos*(IMjintneg__ + IMjDLneg__)
         Nf = self.f_.size
         ω_ = self.ω_
-        F2RT = P2Dbase.F/2/P2Dbase.R/self.T
+        F2RT = 0.5 * P2Dbase.F/P2Dbase.R/self.T
         ΔxWest_, ΔxEast_, Δx_ = self.ΔxWest_, self.ΔxEast_, self.Δx_
         Δxneg, Δxpos = self.Δxneg, self.Δxpos
         ΔIAC, ΔiAC = self.ΔIAC, self.ΔiAC
@@ -662,9 +615,9 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         DeeffWest_ = DeeffEast_ = self.Deeff_
 
         # 各控制体界面的电解液锂离子浓度实部 [mol/m^3]
-        REceInterfaces__ = hstack([REce__[:, [0]], (REce__[:, :-1] + REce__[:, 1:])/2, REce__[:, [-1]]])
+        REceInterfaces__ = hstack([REce__[:, [0]], (REce__[:, :-1] + REce__[:, 1:]) * 0.5, REce__[:, [-1]]])
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
-            # 利用边界条件修正负极-隔膜界面、隔膜-正极界面锂离子浓度
+            # 修正负极-隔膜界面、隔膜-正极界面锂离子浓度
             REceInterfaces__[:, nE] = (DeeffEast_[nW]*REce__[:, nW]*Δx_[nE] + DeeffWest_[nE]*REce__[:, nE]*Δx_[nW])/(
                                        DeeffEast_[nW]*Δx_[nE] + DeeffWest_[nE]*Δx_[nW])
         REceWest__ = REceInterfaces__[:, :-1]  # 各控制体左界面的电解液锂离子浓度 [–]
@@ -677,9 +630,9 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             gradREceWest__[:, nE] = (REce__[:, nE] - REceWest__[:, nE])/(0.5*Δx_[nE])
 
         # 各控制体界面的电解液锂离子浓度虚部 [mol/m^3]
-        IMceInterfaces__ = hstack([IMce__[:, [0]], (IMce__[:, :-1] + IMce__[:, 1:])/2, IMce__[:, [-1]]])
+        IMceInterfaces__ = hstack([IMce__[:, [0]], (IMce__[:, :-1] + IMce__[:, 1:]) * 0.5, IMce__[:, [-1]]])
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
-            # 利用边界条件修正负极-隔膜界面、隔膜-正极界面锂离子浓度
+            # 修正负极-隔膜界面、隔膜-正极界面锂离子浓度
             IMceInterfaces__[:, nE] = (DeeffEast_[nW]*IMce__[:, nW]*Δx_[nE] + DeeffWest_[nE]*IMce__[:, nE]*Δx_[nW])/(DeeffEast_[nW]*Δx_[nE] + DeeffWest_[nE]*Δx_[nW])
         IMceWest__ = IMceInterfaces__[:, :-1]  # 各控制体左界面的电解液锂离子浓度 [mol/m^3]
         IMceEast__ = IMceInterfaces__[:, 1:]   # 各控制体右界面的电解液锂离子浓度 [mol/m^3]
@@ -694,17 +647,17 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         maxError = max([
             abs(array([REcsnegsurf__, IMcsnegsurf__]).transpose(1, 0, 2) - -c['minusKcsnegsurf___'] @ array([REjintneg__, IMjintneg__]).transpose(1, 0, 2)).max(),
             abs(array([REcspossurf__, IMcspossurf__]).transpose(1, 0, 2) - -c['minusKcspossurf___'] @ array([REjintpos__, IMjintpos__]).transpose(1, 0, 2)).max(), ])
-        print(f'固相表面浓度解析解方程最大误差{maxError} mol/m^3')
+        print(f'固相表面浓度解析解方程 cssurf 最大误差{maxError} mol/m^3')
 
         LHS__ = -outer(ω_, εe_) * IMce__
         RHS__ = (DeeffEast_*gradREceEast__ - DeeffWest_*gradREceWest__)/Δx_ + (1 - self.tplus)/P2Dbase.F*hstack([REjintneg__ + REjDLneg__ + REjLP__, zeros([Nf, Nsep]), REjintpos__ + REjDLpos__])
         maxError = abs(LHS__ - RHS__).max()
-        print(f'电解液实部浓度方程最大误差{maxError}')
+        print(f'电解液实部浓度方程 REce 最大误差{maxError} [mol/m^3/s]')
 
         LHS__ = outer(ω_, εe_) * REce__
         RHS__ = (DeeffEast_*gradIMceEast__ - DeeffWest_*gradIMceWest__)/Δx_ + (1 - self.tplus)/P2Dbase.F*hstack([IMjintneg__ + IMjDLneg__ + IMjLP__, zeros([Nf, Nsep]), IMjintpos__ + IMjDLpos__])
         maxError = abs(LHS__ - RHS__).max()
-        print(f'电解液虚部浓度方程最大误差{maxError}')
+        print(f'电解液虚部浓度方程 IMce 最大误差{maxError} [mol/m^3/s]')
 
         gradREφsnegInterfaces__ = hstack([full([Nf, 1], -ΔiAC/σeffneg), (REφsneg__[:, 1:] - REφsneg__[:, :-1])/Δxneg, zeros([Nf, 1])])
         ΔREφsneg_ = (gradREφsnegInterfaces__[:, 1:] - gradREφsnegInterfaces__[:, :-1])/Δxneg
@@ -716,7 +669,7 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         IM_RHS__ = IMjintneg__ + IMjDLneg__+ IMjLP__
         maxError = max([abs(RE_LHS__ - RE_RHS__).max(),
                         abs(IM_LHS__ - IM_RHS__).max(),])
-        print(f'负极固相电势方程最大误差{maxError} A/m^3')
+        print(f'负极固相电势方程 REφsneg IMEφsneg 最大误差{maxError} A/m^3')
 
         gradREφsposInterfaces_ = hstack([zeros([Nf, 1]), (REφspos__[:, 1:] - REφspos__[:, :-1])/Δxpos, full([Nf, 1], -ΔiAC/σeffpos)])
         ΔREφspos__ = (gradREφsposInterfaces_[:, 1:] - gradREφsposInterfaces_[:, :-1])/Δxpos
@@ -728,7 +681,7 @@ class DFNJTFP2D(JTFbase, DFNP2D):
         IM_RHS__ = IMjintpos__ + IMjDLpos__
         maxError = max([abs(RE_LHS__ - RE_RHS__).max(),
                         abs(IM_LHS__ - IM_RHS__).max(), ])
-        print(f'正极固相电势方程最大误差{maxError} A/m^3')
+        print(f'正极固相电势方程 REφspos IMEφspos 最大误差{maxError} A/m^3')
 
         i0intneg_, i0intpos_ = self.i0intneg_, self.i0intpos_
         ηintneg_, ηintpos_ = self.ηintneg_, self.ηintpos_
@@ -737,7 +690,7 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             abs(IMjintneg__ - 2*aeffneg*(IMi0intneg__*sinh(F2RT*ηintneg_) + IMηintneg__*F2RT*i0intneg_*cosh(F2RT*ηintneg_))).max(),
             abs(REjintpos__ - 2*aeffpos*(REi0intpos__*sinh(F2RT*ηintpos_) + REηintpos__*F2RT*i0intpos_*cosh(F2RT*ηintpos_))).max(),
             abs(IMjintpos__ - 2*aeffpos*(IMi0intpos__*sinh(F2RT*ηintpos_) + IMηintpos__*F2RT*i0intpos_*cosh(F2RT*ηintpos_))).max(),])
-        print(f'主反应BV动力学方程最大误差{maxError} A/m^3')
+        print(f'主反应BV动力学方程 REjing IMjing 最大误差{maxError} A/m^3')
 
         di0intdceneg_, di0intdcepos_ = self.di0intdceneg_, self.di0intdcepos_
         di0intdcsnegsurf_, di0intdcspossurf_ = self.di0intdcsnegsurf_, self.di0intdcspossurf_
@@ -746,7 +699,7 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             abs(IMi0intneg__ - (di0intdceneg_*IMce__[:, :Nneg] + di0intdcsnegsurf_*IMcsnegsurf__)).max(),
             abs(REi0intpos__ - (di0intdcepos_*REce__[:, -Npos:] + di0intdcspossurf_*REcspossurf__)).max(),
             abs(IMi0intpos__ - (di0intdcepos_*IMce__[:, -Npos:] + di0intdcspossurf_*IMcspossurf__)).max(), ])
-        print(f'主反应交换电流密度方程最大误差{maxError} A/m^2')
+        print(f'主反应交换电流密度方程 REi0int IMi0int 最大误差{maxError} A/m^2')
 
         dUOCPdcsnegsurf_, dUOCPdcspossurf_ = self.dUOCPdcsnegsurf_, self.dUOCPdcspossurf_
         maxError = max([
@@ -754,18 +707,19 @@ class DFNJTFP2D(JTFbase, DFNP2D):
             abs(IMηintneg__ - (IMφsneg__ - IMφe__[:, :Nneg] - dUOCPdcsnegsurf_*IMcsnegsurf__ - RSEI2aeffneg*(IMjintneg__ + IMjDLneg__ + IMjLP__))).max(),
             abs(REηintpos__ - (REφspos__ - REφe__[:, -Npos:] - dUOCPdcspossurf_*REcspossurf__ - RSEI2aeffpos*(REjintpos__ + REjDLpos__))).max(),
             abs(IMηintpos__ - (IMφspos__ - IMφe__[:, -Npos:] - dUOCPdcspossurf_*IMcspossurf__ - RSEI2aeffpos*(IMjintpos__ + IMjDLpos__))).max(),])
-        print(f'主反应过电位方程最大误差{maxError} [V]')
+        print(f'主反应过电位方程 REηint IMηint 最大误差{maxError} [V]')
 
         if self.lithiumPlating:
+            djLPdce_, djLPdηLP_ = self.djLPdce_, self.djLPdηLP_
             maxError = max([
-                abs(REjLP__ - (self.djLPdce_*REce__[:, :Nneg] + self.djLPdηLP_*REηLP__)).max(),
-                abs(IMjLP__ - (self.djLPdce_*IMce__[:, :Nneg] + self.djLPdηLP_*IMηLP__)).max(),])
-            print(f'析锂BV动力学方程最大误差{maxError} [A/m^3]')
+                abs(REjLP__ - (djLPdce_*REce__[:, :Nneg] + djLPdηLP_*REηLP__)).max(),
+                abs(IMjLP__ - (djLPdce_*IMce__[:, :Nneg] + djLPdηLP_*IMηLP__)).max(),])
+            print(f'析锂BV动力学方程 REjLP IMjLP 最大误差{maxError} [A/m^3]')
 
             maxError = max([
                 abs(REηLP__ - (REφsneg__ - REφe__[:, :Nneg] - RSEI2aeffneg*(REjintneg__ + REjDLneg__ + REjLP__))).max(),
                 abs(IMηLP__ - (IMφsneg__ - IMφe__[:, :Nneg] - RSEI2aeffneg*(IMjintneg__ + IMjDLneg__ + IMjLP__))).max(),])
-            print(f'析锂过电位方程最大误差{maxError} [V]')
+            print(f'析锂过电位方程 REηLP IMηLP 最大误差{maxError} [V]')
 
 
 if __name__=='__main__':
@@ -775,7 +729,7 @@ if __name__=='__main__':
         CDLpos=0.1, CDLneg=0.7,
         # i0intpos=3.67, i0intneg=3.30,
         Aeffneg=0.9, Aeffpos=0.8,
-        Nneg=7, Nsep=8, Npos=7, Nr=10,
+        Nneg=8, Nsep=6, Npos=7, Nr=9,
         f_=np.logspace(3, 0, 16),
         l=1e-7,
         lithiumPlating=True,
@@ -792,7 +746,7 @@ if __name__=='__main__':
     cell.CC(-I, 2300, thermalModel).EIS()
     cell.CC(I, 2000, thermalModel).EIS()
     cell.CC(0, 3700, thermalModel).EIS()
-    # cell.check_EIS()
+    # cell.checkEIS()
     cell.count_lithium()
 
     '''
