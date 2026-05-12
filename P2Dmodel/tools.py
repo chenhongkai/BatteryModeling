@@ -1,8 +1,10 @@
 #%%
 import os
 from math import log10
-from numpy import array, ndarray, zeros, unique, arange, searchsorted, clip
+from typing import Sequence
+from collections.abc import Iterable
 
+from numpy import array, ndarray, zeros, unique, searchsorted, clip, isscalar, linspace
 import matplotlib
 import matplotlib.pyplot as plt
 
@@ -15,6 +17,8 @@ M = 6.941e-3     # 锂的摩尔质量 [kg/mol]
 
 class LumpedParameters:
     """23集总参数取值"""
+    __slots__ = ('bounds__',)
+
     def __init__(self,
             Qnom: float | int = 1, # 电池标称容量 [Ah]
             ):
@@ -198,6 +202,8 @@ class LumpedParameters:
 
 class EnhancedLumpedParameters(LumpedParameters):
     """强集总参数取值"""
+    __slots__ = ()
+
     def __init__(self,
                  Qnom: float | int = 18.,  # 电池标称容量 [Ah]
                  ):
@@ -212,6 +218,8 @@ class EnhancedLumpedParameters(LumpedParameters):
 
 class ConservativeLumpedParameters(LumpedParameters):
     """保守集总参数取值（25参数，含4边界嵌锂状态，不含正负极容量Qneg、Qpos）"""
+    __slots__ = ()
+
     def __init__(self, Qnom):
         LumpedParameters.__init__(self, Qnom=Qnom)
         del self.bounds__['Qneg'], self.bounds__['Qpos']
@@ -283,7 +291,8 @@ def transform37to23(
 
 
 class Interpolate1D:
-    """快速一维线性插值"""
+    # 快速一维线性插值
+    __slots__ = ('x_', 'y_')
 
     def __init__(self, x_, y_):
         assert len(x_) == len(y_), '自变量序列x_的长度应等于因变量序列y_的长度'
@@ -298,7 +307,7 @@ class Interpolate1D:
         del x_, y_, idx_
 
     def __call__(self, x_: ndarray) -> ndarray:
-        """插值"""
+        # 插值
         xbase_ = self.x_
         ybase_ = self.y_
         # 找区间
@@ -316,9 +325,8 @@ class Interpolate1D:
         y_ = yLow_ + (x_ - xLow_) * (yHigh_ - yLow_) / (xHigh_ - xLow_)
         return y_
 
-
 def triband_to_dense(band__: ndarray) -> ndarray:
-    """三角阵的带band__ (3, N)  -> 稠密方阵K__ (N, N)"""
+    # 三角阵的带band__ (3, N)  -> 稠密方阵K__ (N, N)
     N = band__.shape[1]
     N1 = N + 1
     K__ = zeros((N, N), dtype=band__.dtype)
@@ -329,9 +337,9 @@ def triband_to_dense(band__: ndarray) -> ndarray:
     return K__
 
 class DiagonalSliceRavel:
-    """变换切片索引：
-    s_row, s_col -> sr
-    A__[s_row, s_col].diagonal(offset) -> A__.ravel()[sr]"""
+    """变换切片索引
+    s_rows, s_cols -> sr
+    A__[s_rows, s_cols].diagonal(offset) -> A__.ravel()[sr]"""
     __slot__ = ('N',)
 
     def __init__(self,
@@ -362,6 +370,16 @@ class DiagonalSliceRavel:
         step = N + 1
         stop = start + length*step
         return slice(start, stop, step)
+
+def get_color(s_: Sequence | int, n: int, cmap='viridis'):
+    """返回viridis颜色"""
+    if isinstance(s_, Iterable):
+        N = len(s_)
+    elif isscalar(s_):
+        N = int(s_)
+    color_ = plt.get_cmap(cmap)(int(linspace(0, 255, N)[n]))[:3]  # (3,)
+    return color_
+
 
 if __name__ == '__main__':
     pass

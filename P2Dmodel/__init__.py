@@ -1,6 +1,4 @@
 #%%
-from .DFNP2D import DFNP2D
-from .LPP2D import LPP2D
 from .DFNJTFP2D import DFNJTFP2D
 from .LPJTFP2D import LPJTFP2D
 from .ELPJTFP2D import ELPJTFP2D

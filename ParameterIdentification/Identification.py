@@ -36,7 +36,8 @@ class Identification(LumpedParameters):
             f_: Sequence[float] = np.logspace(np.log10(400), np.log10(4), 17),  # 频率序列 [Hz]
             T: int = 1000,     # 迭代次数
             N: int = 100,      # 种群规模
-            n_jobs: int = -1,  # joblib并行执行核数
+            n_jobs: int = -1,     # joblib并行执行核数
+            batch_size: int = 1,  # joblib并行执行batch_size
             algorithm: str = 'STA',  # 优化算法
             objective: str = 'RMSE', # 最小化目标
             verbose = True,          # 是否提示
@@ -57,6 +58,7 @@ class Identification(LumpedParameters):
         self.f_ = np.array(f_)
         self.T, self.N = T, N
         self.n_jobs = n_jobs
+        self.batch_size = batch_size
         self.algorithm = algorithm
         self.objective = objective
         self.I = -abs(self.IC*self.Qnom)  # 充电电流 [A]
@@ -115,7 +117,7 @@ class Identification(LumpedParameters):
         IC, onset, duration = self.IC, self.onset, self.duration
         TVT_ = self.TVT_
         ΔtEIS, ΔtUDC, Δt = self.ΔtEIS, self.ΔtUDC, self.Δt
-        n_jobs, algorithm, objective = self.n_jobs, self.algorithm, self.objective
+        n_jobs, batch_size, algorithm, objective = self.n_jobs, self.batch_size, self.algorithm, self.objective
         if verbose := self.verbose:
             print(f'固定{len(namesfixed_)}参数 {namesfixed_ = }\n'
                   f'待优化{D}参数 {namesoptimized_ = }\n'
@@ -124,7 +126,7 @@ class Identification(LumpedParameters):
                   f'阻抗测量间隔 {ΔtEIS = } s，电压测量间隔 {ΔtUDC = } s，时间步长 {Δt = } s\n'
                   f'拟合目标 {targets_ = }\n'
                   f'初始状态数据类型 {type(states0) = }\n'
-                  f'joblib利用核数 {n_jobs = }\n'
+                  f'joblib利用核数 {n_jobs = }， {batch_size = }\n'
                   f'优化算法 {algorithm = }，目标类型 {objective = }\n'
                   f'时段{onset}-{onset + duration}s，频段{self.f_.min():g}~{self.f_.max():g}Hz，共{len(self.f_)}频点\n')
 
@@ -204,7 +206,8 @@ class Identification(LumpedParameters):
             T=self.T, N=self.N,
             **hyperparameters_Optimizer,
             )
-        optimizer.n_jobs = self.n_jobs
+        optimizer.n_jobs = n_jobs
+        optimizer.batch_size = batch_size
         X__, y_ = optimizer.minimize(X__=X__)
 
         print('验证、测试...')
@@ -241,7 +244,7 @@ class Identification(LumpedParameters):
         record['kwargs'] = self.kwargs.copy()
         del record['kwargs']['dUOCPdθsneg']
         del record['kwargs']['dUOCPdθspos']
-        record |= {
+        record.update({
             'tUDCmea_': self.tUDCmea_,
             'UDCmea_': self.UDCmea_,
             'tZmea_': self.tZmea_,
@@ -262,7 +265,7 @@ class Identification(LumpedParameters):
             'yMean_': optimizer.yMean_,
             'Nfunctions': optimizer.Nfunctions,
             'timeconsumed': (time.time() - timeStart)/3600,
-            }
+            })
         print(f'辨识耗时{record['timeconsumed']:.2f}h')
         return record
 
@@ -284,8 +287,8 @@ class Identification(LumpedParameters):
             print('计算虚拟电池…… Computing a virtual cell...')
         self.create_experiences_()
         cell = self.compute_cell(pnorm_)
-        self.UDCmea_ = cell.interpolate('U', t_=self.tUDCmea_)
-        self.Zmea__  = cell.interpolate('Z_', t_=self.tZmea_, f_=self.f_)
+        self.UDCmea_ = cell('U',  t_=self.tUDCmea_)
+        self.Zmea__  = cell('Z_', t_=self.tZmea_, f_=self.f_)
         self.pVC_ = self.Denormalize(pnorm_)
         if self.verbose:
             print('完成计算虚拟电池。A virtual cell has been computed.')
@@ -422,7 +425,7 @@ class Identification(LumpedParameters):
             case _:
                 raise ValueError(f'无 "{dataset}" 数据集')
 
-        UDCsim_ = cell.interpolate('U', t_=tUDCmea_[logic_tUDC_] - onset)
+        UDCsim_ = cell('U', t_=tUDCmea_[logic_tUDC_] - onset)
         ΔU_ = UDCsim_ - self.UDCmea_[logic_tUDC_]
 
         match objective:
@@ -439,7 +442,7 @@ class Identification(LumpedParameters):
             pass
         else:
             Zmea__ = self.Zmea__[logic_tZ_]
-            Zsim__ = cell.interpolate('Z_', t_=tZmea_[logic_tZ_] - onset, f_=self.f_)
+            Zsim__ = cell('Z_', t_=tZmea_[logic_tZ_] - onset, f_=self.f_)
             ΔZreal__ = Zsim__.real - Zmea__.real
             ΔZimag__ = Zsim__.imag - Zmea__.imag
             match objective:

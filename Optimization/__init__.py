@@ -1,6 +1,8 @@
 #%%
 from typing import Callable
-import os, joblib, time, math
+import os, time, math
+from joblib import Parallel, delayed
+
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 import numpy as np
@@ -45,6 +47,7 @@ class Optimizer:
         self.yCurrentOptimal_ = []  # 每一代种群的最优目标函数值
         self.yMean_ = []            # 每一代种群的平均目标函数值
         self.n_jobs = 1             # joblib并行执行数目
+        self.batch_size = 1         # joblib并行执行batch_size
         self.boundaryHandlingMethod = 'reflect'  # 边界处理方法 reflect / clip
         self.sampleMethod = 'LHS'  # 采样方法 'LHS'/'BCM'
         self.Nfunctions = 0        # function的执行次数
@@ -142,11 +145,14 @@ class Optimizer:
                        X__: np.ndarray,  # (N, D) 种群
                        ) -> np.ndarray:
         """计算种群各个体的目标函数值"""
-        if self.n_jobs==1:
+        if (n_jobs:=self.n_jobs)==1:
             y_ = [self.function(x_) for x_ in X__]  # 所有个体的目标函数值
         else:
-            y_ = joblib.Parallel(n_jobs=self.n_jobs, backend='loky', batch_size=2)(
-                 joblib.delayed(self.function)(x_) for x_ in X__)
+            parallel = Parallel(n_jobs=n_jobs,
+                                backend='loky',
+                                batch_size=self.batch_size,
+                                )
+            y_ = parallel(delayed(self.function)(x_) for x_ in X__)
         y_ = np.array(y_)
         self.Nfunctions += len(y_)
         return y_
@@ -206,3 +212,4 @@ class Optimizer:
 
 
 from .StateTransitionAlgorithm import STA
+
