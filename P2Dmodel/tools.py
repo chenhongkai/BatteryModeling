@@ -336,40 +336,29 @@ def triband_to_dense(band__: ndarray) -> ndarray:
     ravelK_[N::N1] = band__[2, :-1]  # 下对角线
     return K__
 
-class DiagonalSliceRavel:
-    """变换切片索引
-    s_rows, s_cols -> sr
-    A__[s_rows, s_cols].diagonal(offset) -> A__.ravel()[sr]"""
-    __slot__ = ('N',)
-
-    def __init__(self,
-                 N: int,  # 方阵维度 A__.shape[0]
-                 ):
-        self.N = N
-
-    def __call__(self,
-            s_rows: slice,    # 切片索引行
-            s_cols: slice,    # 切片索引列
-            offset: int = 0,  # 对角线 -1 0 1
-            ) -> slice:
-        """变换切片索引：A__[s_row, s_col].diagonal(offset) -> A__.ravel()[sr_diagonal]"""
-        startR = s_rows.start
-        startC = s_cols.start
-        Nrows = s_rows.stop - startR
-        Ncols = s_cols.stop - startC
-        N = self.N
-        start = startR * N + startC    # 主对角线起始
-        if offset==0:
-            length = min(Nrows, Ncols)  # 主对角线长度
-        elif offset>0:
-            start += offset
-            length = min(Nrows, Ncols - offset)
-        else:
-            start -= offset*N
-            length = min(Nrows + offset, Ncols)
-        step = N + 1
-        stop = start + length*step
-        return slice(start, stop, step)
+def diagonalSliceRavel(
+        N: int,           # 矩阵列数
+        s_rows: slice,    # 切片索引行
+        s_cols: slice,    # 切片索引列
+        offset: int = 0,  # 对角线 -1 0 1
+        ) -> slice:
+    """变换切片索引：A__[s_row, s_col].diagonal(offset) -> A__.ravel()[sr_diagonal]"""
+    startR = s_rows.start
+    startC = s_cols.start
+    Nrows = s_rows.stop - startR
+    Ncols = s_cols.stop - startC
+    start = startR * N + startC    # 主对角线起始
+    if offset==0:
+        length = min(Nrows, Ncols)  # 主对角线长度
+    elif offset>0:
+        start += offset
+        length = min(Nrows, Ncols - offset)
+    else:
+        start -= offset*N
+        length = min(Nrows + offset, Ncols)
+    step = N + 1
+    stop = start + length*step
+    return slice(start, stop, step)
 
 def get_color(s_: Sequence | int, n: int, cmap='viridis'):
     """返回viridis颜色"""

@@ -11,7 +11,7 @@ class NMC532(OCPbase):
 
         # COMSOL NMC532
         table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='NMC532')
-        self.NMC532_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC532_COMSOL = OCPbase.interp1d(table['θs'], table['UOCP'])
 
         del table
 

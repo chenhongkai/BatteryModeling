@@ -9,6 +9,7 @@ TVT_ = (.7, .15, .15)  # Ratio of Training, validation, test data
 T = 10#00              # Iterations
 N = 20#0               # population size
 n_jobs = -1            # joblib parallel
+batch_size = 3         # joblib parallel
 algorithm = 'STA'      # State transition algorithm
 objective = 'RMSE'
 Nsample = 5_00#00      # Samples for objective weight estimation
@@ -32,7 +33,7 @@ task = Identification(
     Δt=Δt, ΔtUDC=ΔtUDC, ΔtEIS=ΔtEIS,
     f_=f_,
     T=T, N=N,
-    n_jobs=n_jobs,
+    n_jobs=n_jobs, batch_size=batch_size,
     verbose=True,
     algorithm=algorithm, objective=objective,)
 

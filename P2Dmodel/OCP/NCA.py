@@ -1,32 +1,32 @@
 #%%
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
 
 from P2Dmodel.OCP.OCPbase import OCPbase
 
 
 class NCA(OCPbase):
     def __init__(self):
+        interp1d = OCPbase.interp1d
 
         # COMSOL NCA
         table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='NCA')
-        self.NCA_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NCA_COMSOL = interp1d(table['θs'], table['UOCP'])
 
         # C/100 pseudo OCV, array from digitized plot.
         # https://doi.org/10.1149%2F1.3129656
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NCA_460_Albertus2009')
-        self.NCA_460_Albertus2009 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NCA_460_Albertus2009 = interp1d(table['θs'], table['UOCP'])
 
         # Model fitted data from Fig 6 (e)
         # https://doi.org/10.1016%2Fj.electacta.2007.09.018
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NCA_593_Abraham2008')
-        self.NCA_593_Abraham2008 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NCA_593_Abraham2008 = interp1d(table['θs'], table['UOCP'])
 
         # C/50 rate
         # https://doi.org/10.18154/RWTH-2019-00249
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NCA_716_Hust2019')
-        self.NCA_716_Hust2019 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NCA_716_Hust2019 = interp1d(table['θs'], table['UOCP'])
 
         del table
 

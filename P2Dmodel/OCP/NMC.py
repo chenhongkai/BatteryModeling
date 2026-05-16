@@ -1,46 +1,46 @@
 #%%
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
 
 from P2Dmodel.OCP.OCPbase import OCPbase
 
 
 class NMC(OCPbase):
     def __init__(self):
+        interp1d = OCPbase.interp1d
 
         # C/40 pseudo OCV, array from manuscript appendices.
         # https://doi.org/10.3390%2Fbatteries5030062
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_531_Liebig2019')
-        self.NMC_531_Liebig2019 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_531_Liebig2019 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_668_Birkl2015')
-        self.NMC_668_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_668_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_669_Birkl2015')
-        self.NMC_669_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_669_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_670_Birkl2015')
-        self.NMC_670_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_670_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Dufour2019 thesis fig 2.8, delithiation at C/10 rate
         # https://doi.org/10.1016%2Fj.electacta.2018.03.196
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_853_Dufour2018')
-        self.NMC_853_Dufour2018 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_853_Dufour2018 = interp1d(table['θs'], table['UOCP'])
 
         # Dufour2019 thesis fig 2.8, lithiation at C/10 rate
         # https://doi.org/10.1016%2Fj.electacta.2018.03.196
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC_854_Dufour2018')
-        self.NMC_854_Dufour2018 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.NMC_854_Dufour2018 = interp1d(table['θs'], table['UOCP'])
 
         del table
 

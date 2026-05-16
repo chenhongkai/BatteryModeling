@@ -1,4 +1,6 @@
 #%%
+from functools import partial
+
 from numpy import ndarray,\
     array, zeros, zeros_like, ones, empty, full, hstack, concatenate, stack, \
     exp, sqrt, cos, sin, sinh, cosh, arcsinh, outer, \
@@ -8,11 +10,11 @@ from numpy.linalg import solve
 
 from P2Dmodel.P2Dbase import P2Dbase
 from P2Dmodel.OCP import NMC111, Graphite
-from P2Dmodel.tools import DiagonalSliceRavel
+from P2Dmodel.tools import diagonalSliceRavel
 
 
 class LPJTFP2D(P2Dbase):
-    """锂离子电池集总参数准二维模型 Lumped-Parameter Pseudo-two-Dimension model"""
+    """锂离子电池集总参数时频联合准二维模型 Lumped-Parameter Joint-Time Frequency Pseudo-two-Dimension model"""
 
     __slots__ = (
         # 专有参数名
@@ -613,20 +615,20 @@ class LPJTFP2D(P2Dbase):
                 # 直接求解
                 ΔX_ = solve(J__, F_)
 
-            X_ -= ΔX_
+            X_ -= 1.1*ΔX_
 
             if isnan(X_).any():
-                raise P2Dbase.Error('nan')
+                return nNewton, False, 'nan'
             if (θe_<=0).any():
-                raise P2Dbase.Error('θe<=0')
+                return nNewton, False, 'θe<=0'
             if (θsnegsurf_<=0).any():
-                raise P2Dbase.Error('θsnegsurf<=0')
+                return nNewton, False, 'θsnegsurf<=0'
             if (θsnegsurf_>=1).any():
-                raise P2Dbase.Error('θsnegsurf>=1')
+                return nNewton, False, 'θsnegsurf>=1'
             if (θspossurf_<=0).any():
-                raise P2Dbase.Error('θspossurf<=0')
+                return nNewton, False, 'θspossurf<=0'
             if (θspossurf_>=1).any():
-                raise P2Dbase.Error('θspossurf>=1')
+                return nNewton, False, 'θspossurf>=1'
 
             ΔX_ = abs(ΔX_)
             maxΔθ = ΔX_[s_θ].max()  # 新旧浓度场最大绝对误差
@@ -679,7 +681,7 @@ class LPJTFP2D(P2Dbase):
             self.JLP_[:] = JLP_
             self.Jneg_ += JLP_
 
-        return nNewton  # 返回Newton迭代次数
+        return nNewton, True, None  # 返回Newton迭代次数
 
     def count_lithium(self):
         """统计锂电荷量"""
@@ -772,7 +774,7 @@ class LPJTFP2D(P2Dbase):
         a = 0.5*self.I
         φsposCollector = self.φspos_[-1] - a*self.Δxpos/self.σpos
         φsnegCollector = self.φsneg_[0]  + a*self.Δxneg/self.σneg
-        return φsposCollector - φsnegCollector
+        return φsposCollector - φsnegCollector + self.Ul
 
     def solve_θsnegsurf_(self, Qneg, Dsneg, θsneg__, Jintneg_):
         """求解负极固相表面无量纲锂离子浓度场θsnegsurf_ [–]"""
@@ -1285,7 +1287,7 @@ class LPJTFP2D(P2Dbase):
         # Newton迭代
         J__ = Kinit__.copy()
         ravelJ_ = J__.ravel()
-        dsr = DiagonalSliceRavel(NKinit)
+        dsr = partial(diagonalSliceRavel, NKinit)
         ravelJ_Jintneg_ηintneg_ = ravelJ_[dsr(s_Jintneg, s_ηintneg)]
         ravelJ_Jintpos_ηintpos_ = ravelJ_[dsr(s_Jintpos, s_ηintpos)]
         ravelJ_ηintneg_θsnegsurf_ = ravelJ_[dsr(s_ηintneg, s_θsnegsurf)]
@@ -2044,7 +2046,7 @@ if __name__=='__main__':
     cell.CC(-15, 2000, thermalModel=thermalModel).EIS()
     cell.CC(20, 1000, thermalModel=thermalModel).EIS()
     cell.CC(0, 300, thermalModel=thermalModel).EIS()
-    # cell.checkEIS()
+    cell.checkEIS()
 
     # cell.count_lithium()
 

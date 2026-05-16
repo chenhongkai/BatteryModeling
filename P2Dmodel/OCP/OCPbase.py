@@ -1,9 +1,11 @@
 import pathlib
 from typing import Sequence
 from abc import ABC
+from functools import partial
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.interpolate import interp1d
 
 from P2Dmodel.tools import set_matplotlib
 
@@ -17,8 +19,9 @@ class OCPbase(ABC):
 
     path_OCP_from_COMSOL = path.joinpath('OCP_from_COMSOL.xlsx')
     path_OCP_from_LiionDB = path.joinpath('OCP_from_LiionDB.xlsx')
-    kwargs_interp1d = {'bounds_error': False,
-                       'fill_value': 'extrapolate'}
+    interp1d = partial(interp1d,
+                       bounds_error=False,
+                       fill_value='extrapolate')
 
     @property
     def sources_(self) -> tuple[str]:

@@ -1,17 +1,18 @@
 #%%
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
 
 from P2Dmodel.OCP.OCPbase import OCPbase
 
 
 class Graphite(OCPbase):
+
     def __init__(self):
+        interp1d = OCPbase.interp1d
 
         # COMSOL Graphite
         table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='Graphite')
-        self.Graphite_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_COMSOL = interp1d(table['θs'], table['UOCP'])
 
         # Data points extracted with WebPlotDigitizer,
         # functional form fit with optimization process as discussed in maintext.
@@ -19,82 +20,82 @@ class Graphite(OCPbase):
         # In each step, the OCV was identified after a break of 5 h. The measurement was performed at 23◦C.
         # https://doi.org/10.1149%2F2.0551509jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_6_Ecker2015')
-        self.Graphite_6_Ecker2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_6_Ecker2015 = interp1d(table['θs'], table['UOCP'])
 
         # OCV measured at C/10 5 percent SOC steps,
         # with 5-hour rest and with qOCV method at C/100,
         # charge and discharge results were similar
         # https://doi.org/10.1149%2F2.0321816jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_53_Schmalstieg2018')
-        self.Graphite_53_Schmalstieg2018 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_53_Schmalstieg2018 = interp1d(table['θs'], table['UOCP'])
 
         # Assumed pulse GITT charge OCP curves.
         # No further information provided.
         # Web plot digitized data. Hysteresis factor not included.
         # https://doi.org/10.1149%2F2.064209jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_381_Prada2012')
-        self.Graphite_381_Prada2012 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_381_Prada2012 = OCPbase.interp1d(table['θs'], table['UOCP'])
 
         # Assumed pulse GITT discharge OCP curves.
         # No further information provided.
         # Web plot digitized data. Hysteresis factor not included.
         # https://doi.org/10.1149%2F2.064209jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_382_Prada2012')
-        self.Graphite_382_Prada2012 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_382_Prada2012 = OCPbase.interp1d(table['θs'], table['UOCP'])
 
         # C/40 pseudo OCV, array from manuscript appendices.
         # https://doi.org/10.3390%2Fbatteries5030062
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_532_Liebig2019')
-        self.Graphite_532_Liebig2019 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_532_Liebig2019 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_671_Birkl2015')
-        self.Graphite_671_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_671_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_672_Birkl2015')
-        self.Graphite_672_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_672_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Kokam NMC cells, GITT procedure given in table II,
         # averaged for charge and discharge
         # https://doi.org/10.1149%2F2.0331512jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_673_Birkl2015')
-        self.Graphite_673_Birkl2015 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_673_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
         # Half-python quasi-OCV on charge
         # https://doi.org/10.1016%2Fj.electacta.2012.04.050
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_708_Li2012')
-        self.Graphite_708_Li2012 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_708_Li2012 = interp1d(table['θs'], table['UOCP'])
 
         # C/50 rate
         # https://doi.org/10.18154/RWTH-2019-00249
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_717_Hust2019')
-        self.Graphite_717_Hust2019 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_717_Hust2019 = interp1d(table['θs'], table['UOCP'])
 
             # Dufour2019 thesis fig 2.8, lithiation at C/10 rate
         # https://doi.org/10.1016%2Fj.electacta.2018.03.196
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_851_Dufour2018')
-        self.Graphite_851_Dufour2018 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_851_Dufour2018 = interp1d(table['θs'], table['UOCP'])
 
         # Dufour2019 thesis fig 2.8, delithiation at C/10 rate
         # https://doi.org/10.1016%2Fj.electacta.2018.03.196
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_852_Dufour2018')
-        self.Graphite_852_Dufour2018 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_852_Dufour2018 = interp1d(table['θs'], table['UOCP'])
 
         # C/70 pseudo ocv
         # https://doi.org/10.1149%2F1.2817888
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_967_Kumaresan2008')
-        self.Graphite_967_Kumaresan2008 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_967_Kumaresan2008 = interp1d(table['θs'], table['UOCP'])
 
         # Pulses is applied to the python at a fixed current of C/10 during 12 min,
         # followed by a 4 h relaxation time.
         # https://doi.org/10.1016%2Fj.electacta.2020.137428
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_969_Chaouachi2021')
-        self.Graphite_969_Chaouachi2021 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.Graphite_969_Chaouachi2021 = interp1d(table['θs'], table['UOCP'])
 
         del table
 

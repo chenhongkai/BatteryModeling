@@ -1,34 +1,34 @@
 #%%
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
 
 from P2Dmodel.OCP.OCPbase import OCPbase
 
 
 class LFP(OCPbase):
     def __init__(self):
+        interp1d = OCPbase.interp1d
 
         # COMSOL LFP
         table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='LFP')
-        self.LFP_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.LFP_COMSOL = interp1d(table['θs'], table['UOCP'])
 
         # Assumed pulse GITT charge OCP curves. No further information provided.
         # Web plot digitized data. Hysteresis factor not included.
         # https://doi.org/10.1149%2F2.064209jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='LFP_377_Prada2012')
-        self.LFP_377_Prada2012 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.LFP_377_Prada2012 = interp1d(table['θs'], table['UOCP'])
 
         # Assumed pulse GITT discharge OCP curves. No further information provided.
         # Web plot digitized data. Hysteresis factor not included.
         # https://doi.org/10.1149%2F2.064209jes
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='LFP_378_Prada2012')
-        self.LFP_378_Prada2012 = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.LFP_378_Prada2012 = interp1d(table['θs'], table['UOCP'])
 
         # Sparse GITT data points
         # https://doi.org/10.1149%2F1.1785012
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='LFP_512_Srinivasan2004a')
-        self.LFP_512_Srinivasan2004a = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.LFP_512_Srinivasan2004a = interp1d(table['θs'], table['UOCP'])
 
         del table
 

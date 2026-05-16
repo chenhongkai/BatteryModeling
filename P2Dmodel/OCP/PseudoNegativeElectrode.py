@@ -10,7 +10,7 @@ class PseudoNegativeElectrode(OCPbase):
     def __init__(self):
         # COMSOL 高电位负极
         table = pd.read_excel(OCPbase.path_OCP_from_COMSOL, sheet_name='PseudoNegativeElectrode')
-        self.PseudoNegativeElectrode_COMSOL = interp1d(table['θs'], table['UOCP'], **OCPbase.kwargs_interp1d)
+        self.PseudoNegativeElectrode_COMSOL = OCPbase.interp1d(table['θs'], table['UOCP'])
 
         del table
 

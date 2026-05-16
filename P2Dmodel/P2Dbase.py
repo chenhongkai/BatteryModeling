@@ -2,6 +2,7 @@
 import time, pathlib
 from math import exp
 from typing import Sequence, Callable
+from functools import partial
 from collections import namedtuple, deque
 from abc import ABC, abstractmethod
 
@@ -17,7 +18,7 @@ from numpy import ndarray, nan, \
     cbrt, log10, ptp, ix_, asfortranarray, isnan, savez
 
 from P2Dmodel.OCP import NMC111, Graphite
-from P2Dmodel.tools import Interpolate1D, set_matplotlib, get_color, DiagonalSliceRavel, triband_to_dense,\
+from P2Dmodel.tools import Interpolate1D, set_matplotlib, get_color, diagonalSliceRavel, triband_to_dense,\
     F, R
 
 
@@ -326,29 +327,25 @@ class P2Dbase(ABC):
         record_data = self.record_data
         _stepping = self._stepping
 
-        t_ = self.data['t']  # 读取：已计算时刻序列
         if self.t==0:
             record_data()  # 记录初始时刻数据
-        tStart = t_[-1]    # 开始时刻 [s]
-        tStop = tStart + duration  # 终止时刻 [s]
-        self.I = I                 # 电流 [A]
-        ΔtDefault = self.Δt        # 默认时间步长 [s]
+
+        tStart = t = self.data['t'][-1]  # 开始时刻 [s]
+        tStop = tStart + duration        # 终止时刻 [s]
+
+        self.I = I           # 电流 [A]
+        ΔtDefault = self.Δt  # 默认时间步长 [s]
 
         # 生成矩阵K__矩阵、bK_向量、初始化纯电化学参数相关值
         if self.ravelK_ is None:
             self._generate_K__bK_and_slices()
             self.update_K__with_pure_electrochemical_parameters()
 
-        earlyStop = any([v is not None for v in (Umax, Umin, SOCmax, SOCmin)])  # 提前终止条件
+        earlyStop = any(v is not None for v in (Umax, Umin, SOCmax, SOCmin))  # 提前终止条件
 
-        while True:
+        while t<tStop:
             ## 持续时间步进...
 
-            # 检查终止条件
-            if self.t>=tStop:
-                if verbose:
-                    print(f'\n达到运行时长{duration}s，停止{info}')
-                break
             if earlyStop:
                 if I<0 and (Umax is not None) and self.U>=Umax:
                     if verbose:
@@ -368,35 +365,35 @@ class P2Dbase(ABC):
                     break
 
             # 选择时间步长
-
-            remainingTime = tStop - self.t  # 剩余时长 [s]
+            remainingTime = tStop - t  # 剩余时长 [s]
             if remainingTime<(ΔtDefault + minΔt):
                 Δt = remainingTime  # 使用剩余时长作为最后时间步长
             else:
                 Δt = ΔtDefault  # 使用默认时间步长 [s]
 
             # 更新K__矩阵纯电化学参数相关值
-            if constants:
-                pass
-            else:
+            if not constants:
                 self.update_K__with_pure_electrochemical_parameters()
 
             while True:
                 # 试探步进
-                try:
-                    self.nNewton = _stepping(Δt)
-                    break  # 步进成功，无报错，跳出
-                except P2Dbase.Error as message:
+                nNewton, success, message = _stepping(Δt)
+                if success:
+                    # 步进成功，无报错，跳出
+                    break
+                else:
                     # 步进失败，缩小Δt
                     if Δt==minΔt:
-                        raise
+                        raise P2Dbase.Error(f'异常：时刻{t = }s，时间步长{Δt = }s，第{nNewton}次Newton迭代出现{message}')
                     ΔtNew = max(minΔt, Δt*0.5)
                     if verbose:
-                        print(f'异常：时刻t = {self.t}s，时间步长{Δt = }s，Newton迭代出现{message}，缩小Δt -> {ΔtNew}s', )
+                        print(f'时刻{t = }s，时间步长{Δt = }s，第{nNewton}次Newton迭代出现{message}，缩小Δt -> {ΔtNew}s', )
                     Δt = ΔtNew
-                    continue
 
-            self.t = t_[-1] + Δt  # 更新：时刻 [s]
+
+            t += Δt
+            self.t = t              # 更新：时刻 [s]
+            self.nNewton = nNewton  # 更新：Newton迭代次数
 
             if lithiumPlating:
                 self.QLP += -self.ILP*Δt/3600  # 更新：累计析锂量 [Ah]
@@ -419,11 +416,16 @@ class P2Dbase(ABC):
                 U = self.U
                 SOC = self.SOC
                 print(f'|{finishedBar}{unfinishedBar}|已完成{percentage:.0f}%，耗时{timeStamp:.1f}s，'
-                      f't={self.t:g}s-->{tStop:g}s，{info}，'
+                      f'{t = :g}s-->{tStop:g}s，{info}，'
                       f'电压{U = :.3f}V, {SOC = :.3f}，温度{self.T - 273.15:.1f}°C，'
                       f'析锂过电位{self.ηLPneg_[-1]*1000:.0f}mV，'
-                      f'{self.nNewton}次Newton迭代'
+                      f'{nNewton}次Newton迭代'
                       f'\r', end='')
+        else:
+            if verbose:
+                print(f'\n达到运行时长{duration}s，停止{info}')
+
+
         return self
 
     def _generate_K__bK_and_slices(self):
@@ -477,7 +479,7 @@ class P2Dbase(ABC):
             })
 
         # K__矩阵子块对角元对应K__.ravel()的索引
-        dsr = DiagonalSliceRavel(NK)
+        dsr = partial(diagonalSliceRavel, NK)
         if decouple:
             pass
         else:
@@ -984,7 +986,7 @@ class P2Dbase(ABC):
             's_IMφepos': (s_IMφepos := slice((stop := s_IMφe.stop) - Npos, stop)),   # 索引：正极电解液电势虚部
             })
         # Kf__矩阵子块对角元对应Kf__.ravel()的索引
-        dsr = DiagonalSliceRavel(NKf)
+        dsr = partial(diagonalSliceRavel, NKf)
         slices_.update({
             'sr_REcsnegsurf_REjintneg' : dsr(s_REcsnegsurf, s_REjintneg),
             'sr_REcsnegsurf_IMjintneg' : dsr(s_REcsnegsurf, s_IMjintneg),
@@ -1375,6 +1377,46 @@ class P2Dbase(ABC):
     def xInterfaces_(self):
         """(Ne+1,) 各控制体界面的坐标（包括负极-集流体界面、正极集流体界面）"""
         return hstack([0, self.Δx_.cumsum()])
+
+    @property
+    def Ul(self) -> float:
+        """等效电感l两端感应电压 [V]"""
+        l = self.l
+        if l==0:
+            return 0
+        data = self.data
+        data_t_ = data['t']
+        Nt = len(data_t_)  # 存储数据时刻数
+        if Nt<=1:
+            return 0
+        data_I_ = data['I']
+        t_1 = data_t_[-1]  # 当前时刻 [s]
+        t_2 = data_t_[-2]  # 上时刻 [s]
+        I_1 = data_I_[-1]  # 当前电流 [A]
+        I_2 = data_I_[-2]  # 上时刻电流 [A]
+        Δt = t_1 - t_2     # 时间步长 [s]
+        A = 1/Δt
+        if Nt>2:
+            t_3 = data_t_[-3]  # 上上时刻
+            I_3 = data_I_[-3]  # 上上时刻电流 [A]
+            A += 1/(t_1 - t_3)
+        if Nt>3:
+            t_4 = data_t_[-4]  # 上上上时刻
+            I_4 = data_I_[-4]  # 上上上时刻电流 [A]
+            A += 1/(t_1 - t_4)
+
+        if Nt>3:  # 4点向后差分
+            B = (t_1 - t_3)*(t_1 - t_4)/-Δt/(t_2 - t_3)/(t_2 - t_4)  # [1/s]
+            C = Δt*(t_1 - t_4)/(t_3 - t_1)/(t_3 - t_2)/(t_3 - t_4)
+            D = Δt*(t_1 - t_3)/(t_4 - t_1)/(t_4 - t_2)/(t_4 - t_3)
+            dIdt = A*I_1 +  B*I_2 +  C*I_3 + D*I_4
+        elif Nt==3:  # 3点向后差分
+            B = (t_1 - t_3)/(Δt*(t_3 - t_2))
+            C = Δt/((t_3 - t_1)*(t_3 - t_2))
+            dIdt = A*I_1 + B*I_2 + C*I_3
+        elif Nt==2:    # 2点向后差分
+            dIdt = A*(I_1 - I_2)
+        return dIdt * l
 
     @property
     def OCV(self):

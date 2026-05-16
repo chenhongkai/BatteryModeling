@@ -1,7 +1,7 @@
 #%%
 import warnings
 from typing import Sequence
-from collections import namedtuple
+from functools import partial
 
 import matplotlib.pyplot as plt
 from numpy import ndarray, array, zeros, zeros_like, full, empty, hstack, stack, concatenate, \
@@ -10,11 +10,11 @@ from numpy import ndarray, array, zeros, zeros_like, full, empty, hstack, stack,
 from numpy.linalg import solve
 
 from P2Dmodel.P2Dbase import P2Dbase
-from P2Dmodel.tools import DiagonalSliceRavel, get_color
+from P2Dmodel.tools import diagonalSliceRavel, get_color
 
 
 class DFNJTFP2D(P2Dbase):
-    """锂离子电池经典准二维模型 Doyle-Fuller-Newman Pseudo-two-Dimensional model"""
+    """锂离子电池经典时频联合准二维模型 Doyle-Fuller-Newman Joint-Time Frequency Pseudo-two-Dimensional model"""
 
     __slots__ = (
         # 专有参数名
@@ -588,17 +588,17 @@ class DFNJTFP2D(P2Dbase):
             X_ -= ΔX_
 
             if isnan(X_).any():
-                raise DFNJTFP2D.Error('nan')
+                return nNewton, False, 'nan'
             if (ce_<=0).any():
-                raise DFNJTFP2D.Error(f'ce<=0')
+                return nNewton, False, 'ce<=0'
             if (csnegsurf_<=0).any():
-                raise DFNJTFP2D.Error(f'csnegsurf<=0')
+                return nNewton, False, 'csnegsurf<=0'
             if (csnegsurf_>=csmaxneg).any():
-                raise DFNJTFP2D.Error(f'csnegsurf>=csmaxneg')
+                return nNewton, False, 'csnegsurf>=csmaxneg'
             if (cspossurf_<=0).any():
-                raise DFNJTFP2D.Error(f'cspossurf<=0')
+                return nNewton, False, 'cspossurf<=0'
             if (cspossurf_>=csmaxpos).any():
-                raise DFNJTFP2D.Error(f'cspossurf>=csmaxpos')
+                return nNewton, False, 'cspossurf>=csmaxpos'
 
             ΔX_ = abs(ΔX_)
             maxΔφ = ΔX_[s_φ].max()  # 新旧电势场最大绝对误差
@@ -648,7 +648,7 @@ class DFNJTFP2D(P2Dbase):
             self.jLP_[:] = jLP_
             self.jneg_ += jLP_
 
-        return nNewton  # 返回Newton迭代次数
+        return nNewton, True, None  # 返回Newton迭代次数
 
     def count_lithium(self):
         """统计锂电荷量"""
@@ -782,7 +782,7 @@ class DFNJTFP2D(P2Dbase):
         a = 0.5*self.I/self.A
         φsposCollector = self.φspos_[-1] - a*self.Δxpos/self.σeffpos
         φsnegCollector = self.φsneg_[0]  + a*self.Δxneg/self.σeffneg
-        return φsposCollector - φsnegCollector
+        return φsposCollector - φsnegCollector + self.Ul
 
     @property
     def ceneg_(self):
@@ -1365,7 +1365,7 @@ class DFNJTFP2D(P2Dbase):
         # Newton迭代
         J__ = Kinit__.copy()
         ravelJ_ = J__.ravel()
-        dsr = DiagonalSliceRavel(Ninit)
+        dsr = partial(diagonalSliceRavel, Ninit)
         ravelJ_jintneg_ηintneg_ = ravelJ_[dsr(s_jintneg, s_ηintneg)]
         ravelJ_jintpos_ηintpos_ = ravelJ_[dsr(s_jintpos, s_ηintpos)]
         ravelJ_ηintneg_csnegsurf_ = ravelJ_[dsr(s_ηintneg, s_csnegsurf)]
@@ -2052,11 +2052,11 @@ if __name__=='__main__':
 
     thermalModel = True
     cell.EIS()
-    cell.CC(-I, 2300, thermalModel).EIS()
-    cell.CC(I, 2000, thermalModel).EIS()
-    cell.CC(0, 500, thermalModel).EIS()
+    # cell.CC(-I, 2300, thermalModel).EIS()
+    # cell.CC(I, 2000, thermalModel).EIS()
+    # cell.CC(0, 500, thermalModel).EIS()
 
-    cell.count_lithium()
+    # cell.count_lithium()
 
     # cell.checkEIS()
 
