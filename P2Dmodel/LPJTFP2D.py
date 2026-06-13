@@ -390,13 +390,12 @@ class LPJTFP2D(P2Dbase):
         # 读取状态
         I = self.I  # 电流 [A]
         T = self.T  # 温度 [K]
-        F2RT = 0.5*P2Dbase.F/P2Dbase.R*T  # 常数 [1/V]
         κDκT_ = (self.κD * T) * κ_
         data = self.data  # 运行数据字典
 
         if decouple:
             # 固相表面无量纲浓度θssurf行Jint列
-            # 历史固相浓度影响分量θsI__、系数向量γ_
+            # 历史固相无量纲浓度影响分量θsI__、系数向量γ_
             θsnegI__, γneg_ = self._update_K__bK_θsnegsurf_Jintneg_when_decoupling(Dsneg, Qneg, Δt, self.θsneg__, self.Jintneg_)
             θsposI__, γpos_ = self._update_K__bK_θspossurf_Jintpos_when_decoupling(Dspos, Qpos, Δt, self.θspos__, self.Jintpos_)
         else:
@@ -474,6 +473,7 @@ class LPJTFP2D(P2Dbase):
             # 变电流瞬间
             Jintneg_[:] = Jintneg =  I
             Jintpos_[:] = Jintpos = -I
+            F2RT = 0.5*P2Dbase.F/(P2Dbase.R*T)  # 常数 [1/V]
             ηintneg_[:] = arcsinh(Jintneg/(2 * I0intneg_)) / F2RT
             ηintpos_[:] = arcsinh(Jintpos/(2 * I0intpos_)) / F2RT
             φsneg_[:] = ηintneg_ + RSEIneg*Jintneg + solve_UOCPneg_(θsnegsurf_)
@@ -514,7 +514,7 @@ class LPJTFP2D(P2Dbase):
             F_ = K__.dot(X_) - bK_  # F残差向量的线性部分
 
             # F向量非线性部分
-            θeM_ = 0.5*(θe_[1:] + θe_[:-1])    # (Ne-1,) 相邻浓度均值
+            θeM_ = 0.5*(θe_[1:] + θe_[:-1])    # (Ne-1,) 相邻无量纲浓度均值
             q_ = (θe_[1:] - θe_[:-1]) / θeM_   # (Ne-1,)
             a_ = κDκT2ΔxWest_ * q_  # (Ne-1,)
             c_ = κDκT2ΔxEast_ * q_  # (Ne-1,)
@@ -615,7 +615,7 @@ class LPJTFP2D(P2Dbase):
                 # 直接求解
                 ΔX_ = solve(J__, F_)
 
-            X_ -= 1.1*ΔX_
+            X_ -= ΔX_
 
             if isnan(X_).any():
                 return nNewton, False, 'nan'
@@ -631,7 +631,7 @@ class LPJTFP2D(P2Dbase):
                 return nNewton, False, 'θspossurf>=1'
 
             ΔX_ = abs(ΔX_)
-            maxΔθ = ΔX_[s_θ].max()  # 新旧浓度场最大绝对误差
+            maxΔθ = ΔX_[s_θ].max()  # 新旧无量纲浓度场最大绝对误差
             maxΔφ = ΔX_[s_φ].max()  # 新旧电势场最大绝对误差
             maxΔJ = ΔX_[s_J].max()  # 新旧局部体积电流密度场最大绝对误差
             if maxΔθ<1e-3 and maxΔφ<1e-3 and maxΔJ/(abs(I)+0.001)<1e-3:
@@ -1220,11 +1220,11 @@ class LPJTFP2D(P2Dbase):
 
         ## 对Kinit__的右端项bKinit_赋值 ##
         if self.decouple:
-            # 强制表面浓度约束：认为 θsnegsurf_、θspossurf_ 是外推得到的已知值
+            # 强制表面无量纲浓度约束：认为 θsnegsurf_、θspossurf_ 是外推得到的已知值
             bKinit_[s_θsnegsurf] = θsnegsurfExpl_
             bKinit_[s_θspossurf] = θspossurfExpl_
         else:
-            # 用颗粒扩散边界条件 关联Jint、θssurf以及靠近颗粒表面的3个内部节点浓度
+            # 用颗粒扩散边界条件 关联Jint、θssurf以及靠近颗粒表面的3个内部节点无量纲浓度
             θsneg_ = θsneg__.ravel('F')
             θspos_ = θspos__.ravel('F')
             c_ = self.coeffs_csneg_
@@ -1316,10 +1316,10 @@ class LPJTFP2D(P2Dbase):
             ravelJ_Jintpos_ηintpos_[:] = -solve_dJintdηint_(T, I0intpos_, ηintpos_)  # ∂FJintpos/∂ηintpos
             if I0intnegUnknown:
                 ravelJ_Jintneg_I0intneg_[:]  = -solve_dJintdI0int_(T, ηintneg_)   # ∂FJintneg/∂I0intneg
-                ravelJ_I0intneg_θsnegsurf_[:] = -solve_dI0intdθssurf_(T, θsnegsurf_, θeneg_, I0intneg_)  # ∂FI0intneg/∂θsnegsurf
+                ravelJ_I0intneg_θsnegsurf_[:] = -solve_dI0intdθssurf_(kneg, θsnegsurf_, θeneg_, I0intneg_)  # ∂FI0intneg/∂θsnegsurf
             if I0intposUnknown:
                 ravelJ_Jintpos_I0intpos_[:]   = -solve_dJintdI0int_(T, ηintpos_)  # ∂FJintpos/∂I0intpos
-                ravelJ_I0intpos_θspossurf_[:] = -solve_dI0intdθssurf_(T, θspossurf_, θepos_, I0intpos_)  # ∂FI0intpos/∂θspossurf
+                ravelJ_I0intpos_θspossurf_[:] = -solve_dI0intdθssurf_(kpos, θspossurf_, θepos_, I0intpos_)  # ∂FI0intpos/∂θspossurf
             ravelJ_ηintneg_θsnegsurf_[:] = solve_dUOCPdθsneg_(θsnegsurf_)  # ∂Fηintneg/∂θsnegsurf
             ravelJ_ηintpos_θspossurf_[:] = solve_dUOCPdθspos_(θspossurf_)  # ∂Fηintpos/∂θspossurf
 
@@ -2015,10 +2015,10 @@ class LPJTFP2D(P2Dbase):
                 abs(IMηLP__ - (IMφsneg__ - IMφe__[:, :Nneg] - RSEIneg*(IMJintneg__ + IMJDLneg__ + IMJLP__))).max(), ])
             print(f'析锂过电位方程 REηLP IMηLP 最大误差{maxError: 8e} [V]')
 
-    plot_θ = P2Dbase.plot_c              # 作图：浓度场-空间、时间
+    plot_θ = P2Dbase.plot_c              # 作图：无量纲浓度场-空间、时间
     plot_Jint_I0int_ηint = P2Dbase.plot_jint_i0int_ηint  # 作图：主反应集总局部体积电流密度、集总交换电流、过电位-空间、时间
     plot_JDL = P2Dbase.plot_jDL          # 作图：双电层效应集总局部体积电流密度、电流
-    plot_θsr = P2Dbase.plot_csr          # 作图：固相颗粒径向锂离子浓度场-空间、时间
+    plot_θsr = P2Dbase.plot_csr          # 作图：固相颗粒径向无量纲锂离子浓度场-空间、时间
     plot_JLP_ηLP = P2Dbase.plot_jLP_ηLP  # 作图：负极析锂反应集总局部体积电流密度-空间、时间
     plot_REθssurf_IMEθssurf = P2Dbase.plot_REcssurf_IMcssurf
     plot_REθe_IMθe = P2Dbase.plot_REce_IMce

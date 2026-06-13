@@ -105,7 +105,7 @@ class DFNJTFP2D(P2Dbase):
         self.σneg = σneg;   assert σneg>0, f'负极固相电导率{σneg = }，应大于0 [S/m]'
         self.σpos = σpos;   assert σpos>0, f'正极固相电导率{σpos = }，应大于0 [S/m]'
         self.κ = κ;         assert κ>0, f'电解液离子电导率{κ = }，应大于0 [S/m]'
-        self.tplus = tplus; assert tplus>0, f'电解液迁移数{tplus = }，应大于0'
+        self.tplus = tplus; assert 0<tplus<1, f'电解液迁移数{tplus = }，取值范围应为(0, 1)'
         self.TDF = TDF;     assert TDF>0, f'热力学因子1 + ∂lnf/∂lnce = {TDF = }，应大于0'
         self.RSEIneg = RSEIneg; assert RSEIneg>=0, f'负极SEI膜的面积电阻{RSEIneg = }，应大于或等于0 [Ω·m^2]'
         self.RSEIpos = RSEIpos; assert RSEIpos>=0, f'正极SEI膜的面积电阻{RSEIpos = }，应大于或等于0 [Ω·m^2]'
@@ -356,7 +356,6 @@ class DFNJTFP2D(P2Dbase):
         # 读取状态
         i = (I := self.I)/self.A  # 电流密度 [A/m^2]
         T = self.T                # 温度 [K]
-        F2RT = 0.5*P2Dbase.F/(P2Dbase.R*T)  # 常数 [1/V]
         data = self.data  # 运行数据字典
 
         ravelK_ = self.ravelK_  # 因变量线性矩阵K__展平视图
@@ -442,6 +441,7 @@ class DFNJTFP2D(P2Dbase):
             # 变电流瞬间
             jintneg_[:] = jintneg =  i/self.Lneg
             jintpos_[:] = jintpos = -i/self.Lpos
+            F2RT = 0.5*P2Dbase.F/(P2Dbase.R*T)  # 常数 [1/V]
             ηintneg_[:] = arcsinh(jintneg/(2 * aeffneg * i0intneg_))/F2RT
             ηintpos_[:] = arcsinh(jintpos/(2 * aeffpos * i0intpos_))/F2RT
             φsneg_[:] = ηintneg_ + RSEI2aeffneg*jintneg + solve_UOCPneg_(csnegsurf_/csmaxneg)
@@ -1908,7 +1908,7 @@ class DFNJTFP2D(P2Dbase):
             REjLP__ = 0
             IMjLP__ = 0
             REηLP__ = REφsneg__ - REφe__[:, :Nneg] - RSEI2aeffneg*(REjintneg__ + REjDLneg__)
-            IMηLP__ = IMφsneg__ - IMφe__[:, :Nneg] - RSEI2aeffpos*(IMjintneg__ + IMjDLneg__)
+            IMηLP__ = IMφsneg__ - IMφe__[:, :Nneg] - RSEI2aeffneg*(IMjintneg__ + IMjDLneg__)
         Nf = self.f_.size
         ω_ = self.ω_
         F2RT = 0.5 * P2Dbase.F/P2Dbase.R/self.T
@@ -2052,9 +2052,9 @@ if __name__=='__main__':
 
     thermalModel = True
     cell.EIS()
-    cell.CC(-I, 2300, thermalModel).EIS()
-    cell.CC(I, 2000, thermalModel).EIS()
-    cell.CC(0, 500, thermalModel).EIS()
+    # cell.CC(-I, 2300, thermalModel).EIS()
+    # cell.CC(I, 2000, thermalModel).EIS()
+    # cell.CC(0, 500, thermalModel).EIS()
 
     # cell.count_lithium()
 
