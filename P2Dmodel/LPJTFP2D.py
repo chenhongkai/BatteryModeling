@@ -10,7 +10,7 @@ from numpy.linalg import solve
 
 from P2Dmodel.P2Dbase import P2Dbase
 from P2Dmodel.OCP import NMC111, Graphite
-from P2Dmodel.tools import diagonalSliceRavel
+from P2Dmodel.tools import diagonalSliceRavel, stepping_aware_cached_property
 
 
 class LPJTFP2D(P2Dbase):
@@ -57,15 +57,15 @@ class LPJTFP2D(P2Dbase):
             RSEIpos: float = 2e-5,     # 正极集总SEI膜内阻 [Ω]
             kneg: float = 32.,      # 负极集总反应速率常数 [A]
             kpos: float = 42.,      # 正极集总反应速率常数 [A]
-            kLP: float = 3.607e-6,  # 负极集总析锂反应速率常数 [A]
+            kLP: float = 3.607e-6,  # 负极析锂反应集总速率常数 [A]
             CDLneg: float = 144.691,   # 负极集总双电层电容 [F]
             CDLpos: float = 19.971,    # 正极集总双电层电容 [F]
             l: float = 1e-13,          # 等效电感 [H]
-            I0intneg: float | None = None,  # 负极主反应集总交换电流密度 [A]
-            I0intpos: float | None = None,  # 正极主反应集总交换电流密度 [A]
-            I0LP: float | None = None,      # 负极析锂反应集总交换电流密度 [A]
-            Umin: float = 2.8,      # SOC=100%开路电压 [V]
-            Umax: float  = 4.2,     # SOC=0%开路电压 [V]
+            I0intneg: float | None = None,  # 负极主反应集总交换电流 [A]
+            I0intpos: float | None = None,  # 正极主反应集总交换电流 [A]
+            I0LP: float | None = None,      # 负极析锂反应集总交换电流 [A]
+            Umin: float = 2.8,      # SOC=0%开路电压 [V]
+            Umax: float  = 4.2,     # SOC=100%开路电压 [V]
             θminneg: float = None,  # SOC=0%的负极嵌锂状态 [–]，默认需要由Qcell、Qneg、Qpos计算4个边界嵌锂状态
             θmaxneg: float = None,  # SOC=100%的负极嵌锂状态 [–]
             θminpos: float = None,  # SOC=100%的正极嵌锂状态 [–]
@@ -91,11 +91,11 @@ class LPJTFP2D(P2Dbase):
             if UOCPneg is None:
                 UOCPneg = Graphite().Graphite_COMSOL
             else:
-                assert callable(UOCPneg), '函数UOCPneg，输入负极嵌锂状态θsneg_ [–]，输出正极开路电位UOCPneg_ [V]'
+                assert callable(UOCPneg), '函数UOCPneg，输入负极嵌锂状态θsneg_ [–]，输出负极开路电位UOCPneg_ [V]'
             if UOCPpos is None:
                 UOCPpos = NMC111().NMC111_COMSOL
             else:
-                assert callable(UOCPpos), '函数UOCPpos，输入正极嵌锂状态θspos_ [–]，输出负极开路电位UOCPpos_ [V]'
+                assert callable(UOCPpos), '函数UOCPpos，输入正极嵌锂状态θspos_ [–]，输出正极开路电位UOCPpos_ [V]'
             assert Umax>Umin>0, f'运行电压{Umax = }，{Umin = }，应满足Umax > Umin > 0 [V]'
             θminneg, θmaxneg, θminpos, θmaxpos, ΔFmax = P2Dbase.solve_4θ(
                 UOCPneg, UOCPpos, Qcell, Qneg, Qpos,
@@ -124,17 +124,17 @@ class LPJTFP2D(P2Dbase):
         self.RSEIneg = RSEIneg; assert RSEIneg>=0, f'负极集总SEI膜电阻{RSEIneg = }，应大于或等于0 [Ω]'
         self.RSEIpos = RSEIpos; assert RSEIpos>=0, f'正极集总SEI膜电阻{RSEIpos = }，应大于或等于0 [Ω]'
         # 5动力学参数
-        self.kneg = kneg; assert kneg>0, f'负极集总主反应速率常数{kneg = }，应大于0 [A]'
-        self.kpos = kpos; assert kpos>0, f'正极集总主反应速率常数{kpos = }，应大于0 [A]'
-        self.kLP = kLP;   assert kLP>0, f'负极集总析锂反应速率常数{kLP = }，应大于0 [A]'
-        # 3电抗参数
+        self.kneg = kneg; assert kneg>0, f'负极主反应集总速率常数{kneg = }，应大于0 [A]'
+        self.kpos = kpos; assert kpos>0, f'正极主反应集总速率常数{kpos = }，应大于0 [A]'
+        self.kLP = kLP;   assert kLP>0, f'负极析锂反应集总速率常数{kLP = }，应大于0 [A]'
+        # 3阻抗相关参数
         self.CDLneg = CDLneg; assert CDLneg>=0, f'负极集总双电层电容{CDLneg = }，应大于或等于0 [F]'
         self.CDLpos = CDLpos; assert CDLpos>=0, f'正极集总双电层电容{CDLpos = }，应大于或等于0 [F]'
         self.l = l;           assert l>=0, f'等效电感{l = }，应大于或等于0 [H]'
-        # 3交换电流密度
-        self._I0intneg = self._i0intneg = I0intneg; assert (I0intneg is None) or (I0intneg>0), f'负极主反应集总交换电流密度{I0intneg = }，应大于0 [A]'
-        self._I0intpos = self._i0intpos = I0intpos; assert (I0intpos is None) or (I0intpos>0), f'正极主反应集总交换电流密度{I0intpos = }，应大于0 [A]'
-        self._I0LP = self._i0LP = I0LP;             assert (I0LP is None)  or (I0LP>0), f'负极析锂反应集总交换电流密度{I0LP = }，应大于0 [A]'
+        # 3集总交换电流
+        self._I0intneg = self._i0intneg = I0intneg; assert (I0intneg is None) or (I0intneg>0), f'负极主反应集总交换电流{I0intneg = }，应大于0 [A]'
+        self._I0intpos = self._i0intpos = I0intpos; assert (I0intpos is None) or (I0intpos>0), f'正极主反应集总交换电流{I0intpos = }，应大于0 [A]'
+        self._I0LP = self._i0LP = I0LP;             assert (I0LP is None)  or (I0LP>0), f'负极析锂反应集总交换电流{I0LP = }，应大于0 [A]'
         # P2D通用参数
         P2Dbase.__init__(self,
                          Lneg=1, Lsep=1, Lpos=1,
@@ -153,15 +153,15 @@ class LPJTFP2D(P2Dbase):
         self.θspossurf_ = full(Npos, θspos)  # 初始化：负极、正极固相表面无量纲锂离子浓度场 [–]
         self.θe_ = ones(Ne)                  # 初始化：电解液无量纲锂离子浓度场 [–]
         self.Jintneg_ = zeros(Nneg)
-        self.Jintpos_ = zeros(Npos)  # 初始化：负极、正极集总主反应局部体积电流密度场 [A]
+        self.Jintpos_ = zeros(Npos)  # 初始化：负极、正极主反应集总局部体积电流密度场 [A]
         self.JDLneg_ = zeros(Nneg)
         self.JDLpos_ = zeros(Npos)   # 初始化：负极、正极集总双电层效应局部体积电流密度场 [A]
         I0intneg = self.I0intneg if self._I0intneg else LPJTFP2D.solve_I0int_(self.kneg, θsneg, 1)
         I0intpos = self.I0intpos if self._I0intpos else LPJTFP2D.solve_I0int_(self.kpos, θspos, 1)
         self.I0intneg_ = full(Nneg, I0intneg)
-        self.I0intpos_ = full(Npos, I0intpos)  # 初始化：负极、正极主反应集总交换电流密度场 [A]
+        self.I0intpos_ = full(Npos, I0intpos)  # 初始化：负极、正极主反应集总交换电流场 [A]
         self.Jneg_ = zeros(Nneg)
-        self.Jpos_ = zeros(Npos)     # 初始化：负极、正极总局部体积电流密度场 [A]
+        self.Jpos_ = zeros(Npos)     # 初始化：负极、正极总集总局部体积电流密度场 [A]
         if lithiumPlating := self.lithiumPlating:
             self.JLP_ = zeros(Nneg)  # 初始化：负极析锂反应集总局部体积电流密度场 [A]
         # 恒定量
@@ -170,27 +170,27 @@ class LPJTFP2D(P2Dbase):
         if self.complete:
             # 状态量
             Nf = self.f_.size
-            self.REθsnegsurf__, self.IMθsnegsurf__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极固相表面浓度实部、虚部
-            self.REθspossurf__, self.IMθspossurf__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极固相表面浓度实部、虚部
-            self.REθe__, self.IMθe__ = empty((Nf, Ne)), empty((Nf, Ne))                    # 电解液锂离子浓度实部、虚部
-            self.REJintneg__, self.IMJintneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))      # 负极主反应局部体积电流密度实部、虚部
-            self.REJintpos__, self.IMJintpos__ = empty((Nf, Npos)), empty((Nf, Npos))      # 正极主反应局部体积电流密度实部、虚部
-            self.REJDLneg__, self.IMJDLneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))        # 负极双电层局部体积电流密度实部、虚部
-            self.REJDLpos__, self.IMJDLpos__ = empty((Nf, Npos)), empty((Nf, Npos))        # 正极双电层局部体积电流密度实部、虚部
-            self.REI0intneg__, self.IMI0intneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))    # 负极交换电流密度实部、虚部
-            self.REI0intpos__, self.IMI0intpos__ = empty((Nf, Npos)), empty((Nf, Npos))    # 正极交换电流密度实部、虚部
+            self.REθsnegsurf__, self.IMθsnegsurf__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 负极固相表面无量纲浓度实部、虚部
+            self.REθspossurf__, self.IMθspossurf__ = empty((Nf, Npos)), empty((Nf, Npos))  # 正极固相表面无量纲浓度实部、虚部
+            self.REθe__, self.IMθe__ = empty((Nf, Ne)), empty((Nf, Ne))                    # 电解液无量纲锂离子浓度实部、虚部
+            self.REJintneg__, self.IMJintneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))      # 负极主反应集总局部体积电流密度实部、虚部
+            self.REJintpos__, self.IMJintpos__ = empty((Nf, Npos)), empty((Nf, Npos))      # 正极主反应集总局部体积电流密度实部、虚部
+            self.REJDLneg__, self.IMJDLneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))        # 负极双电层集总局部体积电流密度实部、虚部
+            self.REJDLpos__, self.IMJDLpos__ = empty((Nf, Npos)), empty((Nf, Npos))        # 正极双电层集总局部体积电流密度实部、虚部
+            self.REI0intneg__, self.IMI0intneg__ = empty((Nf, Nneg)), empty((Nf, Nneg))    # 负极主反应集总交换电流实部、虚部
+            self.REI0intpos__, self.IMI0intpos__ = empty((Nf, Npos)), empty((Nf, Npos))    # 正极主反应集总交换电流实部、虚部
             if lithiumPlating:
-                self.REJLP__, self.IMJLP__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 析锂反应局部体积电流密度实部、虚部
+                self.REJLP__, self.IMJLP__ = empty((Nf, Nneg)), empty((Nf, Nneg))  # 析锂反应集总局部体积电流密度实部、虚部
 
             extra_datanames_ = [            # 需记录的数据名称
                 'θsneg__', 'θspos__',        # 负极、正极固相无量纲锂离子浓度场 [–]
                 'θsnegsurf_', 'θspossurf_',  # 负极、正极表面无量纲锂离子浓度场 [–]
                 'θe_',                       # 电解液无量纲锂离子浓度场 [–]
                 'Jintneg_', 'Jintpos_',      # 负极、正极主反应集总局部体积电流密度场 [A]
-                'JDLpos_', 'JDLneg_',        # 负极、正极双电层效应集总局部体积电流密度场 [A]
-                'I0intneg_', 'I0intpos_',]   # 负极、正极主反应集总交换电流密度场 [A]
+                'JDLneg_', 'JDLpos_',        # 负极、正极双电层效应集总局部体积电流密度场 [A]
+                'I0intneg_', 'I0intpos_',]   # 负极、正极主反应集总交换电流场 [A]
             if lithiumPlating:
-                extra_datanames_.append('JLP_')  # 负极析锂集总局部体积电流密度场 [A]
+                extra_datanames_.append('JLP_')  # 负极析锂反应集总局部体积电流密度场 [A]
             extra_EISdatanames_ = [                # 额外需记录的阻抗数据名称
                 'REθsnegsurf__', 'IMθsnegsurf__',  # 负极固相表面无量纲锂离子浓度实部、虚部 [–]
                 'REθspossurf__', 'IMθspossurf__',  # 正极固相表面无量纲锂离子浓度实部、虚部 [–]
@@ -199,8 +199,8 @@ class LPJTFP2D(P2Dbase):
                 'REJintpos__', 'IMJintpos__',      # 正极主反应集总局部体积电流密度实部、虚部 [A]
                 'REJDLneg__', 'IMJDLneg__',        # 负极双电层效应集总局部体积电流密度实部、虚部 [A]
                 'REJDLpos__', 'IMJDLpos__',        # 正极双电层效应集总局部体积电流密度实部、虚部 [A]
-                'REI0intneg__', 'IMI0intneg__',    # 负极主反应集总交换电流密度实部、虚部 [A]
-                'REI0intpos__', 'IMI0intpos__',]   # 正极主反应集总交换电流密度实部、虚部 [A]
+                'REI0intneg__', 'IMI0intneg__',    # 负极主反应集总交换电流实部、虚部 [A]
+                'REI0intpos__', 'IMI0intpos__',]   # 正极主反应集总交换电流实部、虚部 [A]
             self.datanames_.extend(extra_datanames_)
             self.EISdatanames_.extend(extra_EISdatanames_)
             self.data.update({name: [] for name in (extra_datanames_ + extra_EISdatanames_)})
@@ -210,7 +210,7 @@ class LPJTFP2D(P2Dbase):
             self.rSign, self.rUnit = r'$\overline{\it r}$', ''  # 颗粒径向坐标r符号、单位
             self.cSign, self.cUnit = r'${\it θ}$', ''   # 锂离子浓度θ符号、单位
             self.jSign, self.jUnit = r'${\it J}$', 'A'  # 集总局部体积电流密度J符号、单位
-            self.i0Sign, self.i0Unit = r'${\it I}_{0}$', 'A'  # 集总交换电流密度I0符号、单位
+            self.i0Sign, self.i0Unit = r'${\it I}_{0}$', 'A'  # 集总交换电流I0符号、单位
 
         if self.verbose and type(self) is LPJTFP2D:
             print(self)
@@ -374,18 +374,18 @@ class LPJTFP2D(P2Dbase):
         Qneg, Qpos = self.Qneg, self.Qpos              # 读取：负极、正极容量 [Ah]
         κ_ = self.κ_
         if I0intnegUnknown := (self._I0intneg is None):
-            kneg = self.kneg          # 读取：负极集总主反应速率常数 [A]
+            kneg = self.kneg          # 读取：负极主反应集总速率常数 [A]
         else:
-            I0intneg = self.I0intneg  # 读取：负极集总主反应交换电流密度 [A]
+            I0intneg = self.I0intneg  # 读取：负极主反应集总交换电流 [A]
         if I0intposUnknown := (self._I0intpos is None):
-            kpos = self.kpos          # 读取：正极集总主反应速率常数 [A]
+            kpos = self.kpos          # 读取：正极主反应集总速率常数 [A]
         else:
-            I0intpos = self.I0intpos  # 读取：正极集总主反应交换电流密度 [A]
+            I0intpos = self.I0intpos  # 读取：正极主反应集总交换电流 [A]
         if lithiumPlating:
             if I0LPUnknown := (self._I0LP is None):
                 kLP = self.kLP    # 读取：负极析锂反应速率常数 [A]
             else:
-                I0LP = self.I0LP  # 读取：负极析锂反应交换电流密度 [A]
+                I0LP = self.I0LP  # 读取：负极析锂反应集总交换电流 [A]
 
         # 读取状态
         I = self.I  # 电流 [A]
@@ -395,7 +395,7 @@ class LPJTFP2D(P2Dbase):
         data = self.data  # 运行数据字典
 
         if decouple:
-            # 固相表面浓度θssurf行Jint列
+            # 固相表面无量纲浓度θssurf行Jint列
             # 历史固相浓度影响分量θsI__、系数向量γ_
             θsnegI__, γneg_ = self._update_K__bK_θsnegsurf_Jintneg_when_decoupling(Dsneg, Qneg, Δt, self.θsneg__, self.Jintneg_)
             θsposI__, γpos_ = self._update_K__bK_θspossurf_Jintpos_when_decoupling(Dspos, Qpos, Δt, self.θspos__, self.Jintpos_)
@@ -404,7 +404,7 @@ class LPJTFP2D(P2Dbase):
             self._update_K__bK_θsneg_θsneg_Jintneg_when_coupling(Dsneg, Qneg, Δt, self.θsneg__, self.Jintneg_)
             self._update_K__bK_θspos_θspos_Jintpos_when_coupling(Dspos, Qpos, Δt, self.θspos__, self.Jintpos_)
 
-        # 电解液浓度θe行θe、J列
+        # 电解液无量纲浓度θe行θe、J列
         self._update_K__bK_θe_θe_J(
             self.Deκ_, self.qe_, Δt,
             self.θe_, self.Jneg_, self.Jpos_)
@@ -537,7 +537,7 @@ class LPJTFP2D(P2Dbase):
             F_[s_ηintneg] += solve_UOCPneg_(θsnegsurf_)  # F向量ηintneg非线性部分
             F_[s_ηintpos] += solve_UOCPpos_(θspossurf_)  # F向量ηintpos非线性部分
             if lithiumPlating:
-                I0LP_ = solve_I0LP_(kLP, θeneg_) if I0LPUnknown else I0LP  # 负极析锂反应的交换电流场 [A]
+                I0LP_ = solve_I0LP_(kLP, θeneg_) if I0LPUnknown else I0LP  # 负极析锂反应集总交换电流场 [A]
                 F_[s_JLP] -= solve_JLP_(T, I0LP_, ηLP_)   # F向量JLP部分
 
             # 更新Jacobi矩阵非线性部分
@@ -599,8 +599,8 @@ class LPJTFP2D(P2Dbase):
             ravelJ_ηintneg_θsnegsurf_[:] = solve_dUOCPdθsneg_(θsnegsurf_)  # ∂Fηintneg/∂θsnegsurf
             ravelJ_ηintpos_θspossurf_[:] = solve_dUOCPdθspos_(θspossurf_)  # ∂Fηintpos/∂θspossurf
             if lithiumPlating:
-                ravelJ_JLP_θeneg_[:] = -solve_dJLPdθe_(T, θeneg_, I0LP_, ηLP_)  # ∂FJLP/∂ce
-                ravelJ_JLP_ηLP_[:]   = -solve_dJLPdηLP_(T, I0LP_, ηLP_)         # ∂FJLP/∂ce
+                ravelJ_JLP_θeneg_[:] = -solve_dJLPdθe_(T, θeneg_, I0LP_, ηLP_)  # ∂FJLP/∂θe
+                ravelJ_JLP_ηLP_[:]   = -solve_dJLPdηLP_(T, I0LP_, ηLP_)         # ∂FJLP/∂ηLP
 
             if (self.banded_experience_of_J__ is None) and any(data['I']):
                 self.banded_experience_of_J__ = expe = P2Dbase.banded_experience(J__)
@@ -696,7 +696,7 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def I0intneg(self):
-        """负极主反应交换电流 [A]"""
+        """负极主反应集总交换电流 [A]"""
         return self.Arrhenius(self._I0intneg, self.Ekneg)
     @I0intneg.setter
     def I0intneg(self, I0intneg):
@@ -704,7 +704,7 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def I0intpos(self):
-        """正极主反应交换电流 [A]"""
+        """正极主反应集总交换电流 [A]"""
         return self.Arrhenius(self._I0intpos, self.Ekpos)
     @I0intpos.setter
     def I0intpos(self, I0intpos):
@@ -712,7 +712,7 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def I0LP(self):
-        """负极析锂反应交换电流 [A]"""
+        """负极析锂反应集总交换电流 [A]"""
         return self.Arrhenius(self._I0LP, self.EkLP)
     @I0LP.setter
     def I0LP(self, I0LP):
@@ -821,7 +821,7 @@ class LPJTFP2D(P2Dbase):
         Δx_ = self.Δx_
         θe_ = self.θe_
         κ_ = self.κ_
-        θeInterfaces_ = hstack([θe_[0], (θe_[:-1] + θe_[1:])/2, θe_[-1]])  # 各控制体界面的锂离子浓度
+        θeInterfaces_ = hstack([θe_[0], (θe_[:-1] + θe_[1:])/2, θe_[-1]])  # 各控制体界面的无量纲锂离子浓度
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
             # 修正负极-隔膜界面、隔膜-正极界面
             a, b = κ_[nE]*Δx_[nW], κ_[nW]*Δx_[nE]
@@ -835,10 +835,10 @@ class LPJTFP2D(P2Dbase):
         Δx_, ΔxWest_, ΔxEast_ = self.Δx_, self.ΔxWest_, self.ΔxEast_
         φe_, θe_ = self.φe_, self.θe_
         θeInterfaces_ = self.θeInterfaces_
-        θeWest_ = θeInterfaces_[:-1]  # 各控制体左界面的电解液锂离子浓度
-        θeEast_ = θeInterfaces_[1:]  # 各控制体右界面的电解液锂离子浓度
-        gradθeWest_ = hstack([0, (θe_[1:] - θe_[:-1])/ΔxWest_[1:]])  # 各控制体左界面的锂离子浓度梯度
-        gradθeEast_ = hstack([(θe_[1:] - θe_[:-1])/ΔxEast_[:-1], 0])  # 各控制体右界面的锂离子浓度梯度
+        θeWest_ = θeInterfaces_[:-1]  # 各控制体左界面的电解液无量纲锂离子浓度
+        θeEast_ = θeInterfaces_[1:]  # 各控制体右界面的电解液无量纲锂离子浓度
+        gradθeWest_ = hstack([0, (θe_[1:] - θe_[:-1])/ΔxWest_[1:]])  # 各控制体左界面的无量纲锂离子浓度梯度
+        gradθeEast_ = hstack([(θe_[1:] - θe_[:-1])/ΔxEast_[:-1], 0])  # 各控制体右界面的无量纲锂离子浓度梯度
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
             # 修正负极-隔膜界面、修正隔膜-正极界面
             gradθeEast_[nW] = (θeEast_[nW] - θe_[nW])/(0.5*Δx_[nW])
@@ -860,82 +860,82 @@ class LPJTFP2D(P2Dbase):
 
     @staticmethod
     def solve_Jint_(T, I0int_, ηint_) -> ndarray:
-        """求解主反应局部体积电流密度Jint [A]"""
+        """求解主反应集总局部体积电流密度 Jint [A]"""
         return 2*I0int_*sinh(P2Dbase.F/(2*P2Dbase.R*T)*ηint_)
 
     @property
     def dJintdI0intneg_(self):
-        """负极主反应局部体积电流密度Jintneg对交换电流密度I0intneg的偏导数 [A/A]"""
+        """负极主反应集总局部体积电流密度 Jintneg 对集总交换电流 I0intneg 的偏导数 [A/A]"""
         return LPJTFP2D.solve_dJintdI0int_(self.T, self.ηintneg_)
 
     @property
     def dJintdI0intpos_(self):
-        """正极主反应局部体积电流密度Jintpos对交换电流密度I0pos的偏导数 [A/A]"""
+        """正极主反应集总局部体积电流密度 Jintpos 对集总交换电流 I0intpos 的偏导数 [A/A]"""
         return LPJTFP2D.solve_dJintdI0int_(self.T, self.ηintpos_)
 
     @staticmethod
     def solve_dJintdI0int_(T, ηint_) -> ndarray:
-        """求解主反应局部体积电流密度Jint对交换电流密度I0int的偏导数 [A/A]"""
+        """求解主反应集总局部体积电流密度 Jint 对集总交换电流 I0int 的偏导数 [A/A]"""
         return 2*sinh(P2Dbase.F/(2*P2Dbase.R*T)*ηint_)
 
     @property
     def dJintdηintneg_(self):
-        """负极主反应局部体积电流密度Jintneg对过电位ηintneg的偏导数 [A/V]"""
+        """负极主反应集总局部体积电流密度 Jintneg 对过电位ηintneg的偏导数 [A/V]"""
         return LPJTFP2D.solve_dJintdηint_(self.T, self.I0intneg_, self.ηintneg_)
 
     @property
     def dJintdηintpos_(self):
-        """正极主反应局部体积电流密度Jintpos对过电位ηintpos的偏导数 [A/V]"""
+        """正极主反应集总局部体积电流密度 Jintpos 对过电位ηintpos的偏导数 [A/V]"""
         return LPJTFP2D.solve_dJintdηint_(self.T, self.I0intpos_, self.ηintpos_)
 
     @staticmethod
     def solve_dJintdηint_(T, I0int_, ηint_) -> ndarray:
-        """求解主反应局部体积电流密度Jint对过电位ηint的偏导数 [A/V]"""
+        """求解主反应集总局部体积电流密度 Jint 对过电位ηint的偏导数 [A/V]"""
         FRT = P2Dbase.F/(P2Dbase.R*T)
         return FRT*I0int_*cosh(FRT*0.5*ηint_)
 
     @staticmethod
     def solve_I0int_(k, θssurf_, θe_) -> ndarray:
-        """由固液相浓度场求主反应交换电流密度I0int [A]"""
+        """由固液相浓度场求主反应集总交换电流I0int [A]"""
         return k * sqrt(θe_*(1 - θssurf_)*θssurf_)
 
     @property
     def dI0intdθsnegsurf_(self):
-        """负极主反应交换电流密度I0intneg对电极表面浓度的偏导数 [A/-]"""
+        """负极主反应集总交换电流 I0intneg 对电极表面浓度的偏导数 [A/-]"""
         return 0  if self._I0intneg\
             else LPJTFP2D.solve_dI0intdθssurf_(self.kneg, self.θsnegsurf_, self.θeneg_, self.I0intneg_)
 
     @property
     def dI0intdθspossurf_(self):
-        """正极主反应交换电流密度I0intpos对电极表面嵌锂状态的偏导数 [A/-]"""
+        """正极主反应集总交换电流 I0intpos 对电极表面嵌锂状态的偏导数 [A/-]"""
         return 0 if self._I0intpos\
             else LPJTFP2D.solve_dI0intdθssurf_(self.kpos, self.θspossurf_, self.θepos_, self.I0intpos_)
 
     @staticmethod
     def solve_dI0intdθssurf_(k, θssurf_, θe_, I0int_):
-        """求解主反应交换电流密度I0int对固相颗粒表面无量纲锂离子浓度θssurf的偏导数 [A/-]"""
+        """求解主反应集总交换电流 I0int 对固相颗粒表面无量纲锂离子浓度θssurf的偏导数 [A/-]"""
         return k*k * θe_*(0.5 - θssurf_)/I0int_
 
     @property
     def dI0intdθeneg_(self):
-        """负极主反应交换电流密度I0int对电解液浓度θe的偏导数 [A/-]"""
+        """负极主反应集总交换电流 I0int 对电解液无量纲浓度θe的偏导数 [A/-]"""
         return 0 if self._I0intneg \
             else LPJTFP2D.solve_dI0intdθe_(self.θeneg_, self.I0intneg_)
 
     @property
     def dI0intdθepos_(self):
-        """正极主反应交换电流密度I0int对电解液浓度θe的偏导数 [A/-]"""
+        """正极主反应集总交换电流 I0int 对电解液无量纲浓度θe的偏导数 [A/-]"""
         return 0 if self._I0intpos \
             else LPJTFP2D.solve_dI0intdθe_(self.θepos_, self.I0intpos_)
 
     @staticmethod
     def solve_dI0intdθe_(θe_, I0int_):
-        """求解主反应交换电流密度I0int对电解液无量纲锂离子浓度θe的偏导数  [A/-]"""
+        """求解主反应集总交换电流 I0int 对电解液无量纲锂离子浓度θe的偏导数  [A/-]"""
         return 0.5*I0int_/θe_
 
     @staticmethod
     def solve_JLP_(T, I0LP_, ηLP_) -> ndarray:
-        """求解析锂反应局部体积电流密度JLP [A]"""
+        """计算析锂反应集总局部体积电流密度 JLP [A]"""
         FRT = P2Dbase.F/P2Dbase.R/T
         a, b = 0.3*FRT, -0.7*FRT
         JLP_ = I0LP_*(exp(a*ηLP_) - exp(b*ηLP_))
@@ -944,13 +944,13 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def dJLPdθe_(self):
-        """析锂反应局部体积电流密度JLP对电解液浓度θe的偏导数 [A/-]"""
+        """析锂反应集总局部体积电流密度 JLP 对电解液无量纲浓度θe的偏导数 [A/-]"""
         return 0 if self._I0LP \
             else LPJTFP2D.solve_dJLPdθe_(self.T, self.θeneg_, self.I0LP_, self.ηLPneg_)
 
     @staticmethod
     def solve_dJLPdθe_(T, θeneg_, I0LP_, ηLP_):
-        """析锂反应局部体积电流密度JLP对电解液锂离子浓度θe的偏导数 [A/-]"""
+        """析锂反应集总局部体积电流密度 JLP 对电解液无量纲锂离子浓度θe的偏导数 [A/-]"""
         FRT = P2Dbase.F/P2Dbase.R/T
         a, b = 0.3*FRT, -0.7*FRT
         dJLPdI0LP_ = exp(a*ηLP_) - exp(b*ηLP_)
@@ -961,12 +961,12 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def dJLPdηLP_(self):
-        """析锂反应局部体积电流密度JLP对析锂过电位ηLP的偏导数 [A/V]"""
+        """析锂反应集总局部体积电流密度 JLP 对析锂过电位ηLP的偏导数 [A/V]"""
         return LPJTFP2D.solve_dJLPdηLP_(self.T, self.I0LP_, self.ηLPneg_)
 
     @staticmethod
     def solve_dJLPdηLP_(T, I0LP_, ηLP_):
-        """求解析锂反应局部体积电流密度JLP对析锂过电位ηLP的偏导数 [A/V]"""
+        """计算析锂反应集总局部体积电流密度 JLP 对析锂过电位ηLP的偏导数 [A/V]"""
         FRT = P2Dbase.F/(P2Dbase.R*T)
         a, b = 0.3*FRT, -0.7*FRT
         dJLPdηLP_ = I0LP_*(a*exp(a*ηLP_) - b*exp(b*ηLP_))
@@ -975,13 +975,13 @@ class LPJTFP2D(P2Dbase):
 
     @property
     def I0LP_(self):
-        """(Nneg,) 析锂反应交换电流密度场[A]"""
+        """(Nneg,) 析锂反应集总交换电流场 [A]"""
         return full(self.Nneg, self.I0LP) if self._I0LP else\
             LPJTFP2D.solve_I0LP_(self.kLP, self.θeneg_)
 
     @staticmethod
     def solve_I0LP_(kLP, θeneg_) -> ndarray:
-        """求解析锂反应交换电流密度I0LP [A]"""
+        """计算析锂反应集总交换电流 I0LP [A]"""
         return kLP * θeneg_**0.3
 
     @property
@@ -1011,8 +1011,8 @@ class LPJTFP2D(P2Dbase):
         x_, Δx_, ΔxWest_, ΔxEast_ = self.x_, self.Δx_, self.ΔxWest_, self.ΔxEast_
         θe_ = self.θe_
         θeInterfaces_ = self.θeInterfaces_
-        θeWest_ = θeInterfaces_[:-1]  # 各控制体左界面的电解液锂离子浓度
-        θeEast_ = θeInterfaces_[1:]   # 各控制体右界面的电解液锂离子浓度
+        θeWest_ = θeInterfaces_[:-1]  # 各控制体左界面的电解液无量纲锂离子浓度
+        θeEast_ = θeInterfaces_[1:]   # 各控制体右界面的电解液无量纲锂离子浓度
         gradθe_ = hstack([
             (θe_[1] - θe_[0])/(x_[1] - x_[0]) * 0.5,       # 负极首个控制体
             (θe_[2:] - θe_[:-2])/(x_[2:] - x_[:-2]),       # 内部控制体
@@ -1140,7 +1140,7 @@ class LPJTFP2D(P2Dbase):
         # 令：JDLneg_ = JDLpos_ = JLP_ = 0
         Nr, Nneg, Nsep, Npos, Ne = self.Nr, self.Nneg, self.Nsep, self.Npos, self.Ne  # 读取：网格数
         assert θsneg__.shape==(Nr, Nneg), f'负极固相颗粒内部无量纲锂离子浓度θsneg__.shape应为({Nr}, {Nneg})'
-        assert θsneg__.shape==(Nr, Nneg), f'正极固相颗粒内部无量纲锂离子浓度θspos__.shape应为({Nr}, {Npos})'
+        assert θspos__.shape==(Nr, Npos), f'正极固相颗粒内部无量纲锂离子浓度θspos__.shape应为({Nr}, {Npos})'
         assert θe_.shape==(self.Ne,), f'电解液无量纲锂离子浓度θe_.shape应为({self.Ne},)'
         assert ((0<=θsneg__) & (θsneg__<=1)).all(), 'θsneg__取值范围应为(0, 1)'
         assert ((0<=θspos__) & (θspos__<=1)).all(), 'θspos__取值范围应为(0, 1)'
@@ -1205,13 +1205,13 @@ class LPJTFP2D(P2Dbase):
         RSEIneg = self.RSEIneg
         RSEIpos = self.RSEIpos
         if I0intnegUnknown := (self._I0intneg is None):
-            kneg = self.kneg          # 读取：负极集总主反应速率常数 [A]
+            kneg = self.kneg          # 读取：负极主反应集总速率常数 [A]
         else:
-            I0intneg = self.I0intneg  # 读取：负极集总主反应交换电流密度 [A]
+            I0intneg = self.I0intneg  # 读取：负极主反应集总交换电流 [A]
         if I0intposUnknown := (self._I0intpos is None):
-            kpos = self.kpos          # 读取：正极集总主反应速率常数 [A]
+            kpos = self.kpos          # 读取：正极主反应集总速率常数 [A]
         else:
-            I0intpos = self.I0intpos  # 读取：正极集总主反应交换电流密度 [A]
+            I0intpos = self.I0intpos  # 读取：正极主反应集总交换电流 [A]
 
         # 外推表面浓度
         c_ = self.coeffsExpl_
@@ -1364,17 +1364,17 @@ class LPJTFP2D(P2Dbase):
         # 生成频域因变量矩阵Kf__、常数项向量bKf_及切片索引，并对Kf__赋常系数、几何网格相关参数
         P2Dbase._generate_Kf__bKf_and_slices(self)
         # 集总参数模型需额外赋固定值（经典DFN-P2D模型此处为参数tplus相关的值）
-        # 电解液浓度实部REθe行、虚部IMθe行
+        # 电解液无量纲浓度实部REθe行、虚部IMθe行
         ravelKf_ = self.ravelKf_
         sKf = self.sKf
         ravelKf_[sKf.sr_REceneg_REjintneg] = \
         ravelKf_[sKf.sr_REceneg_REjDLneg ] = \
         ravelKf_[sKf.sr_IMceneg_IMjintneg] = \
-        ravelKf_[sKf.sr_IMceneg_IMjDLneg ] = -self.Δxneg  # REJneg、IMJneg列
+        ravelKf_[sKf.sr_IMceneg_IMjDLneg ] = -self.Δxneg  # REJintneg、REJDLneg列；IMJintneg、IMJDLneg列
         ravelKf_[sKf.sr_REcepos_REjintpos] = \
         ravelKf_[sKf.sr_REcepos_REjDLpos ] = \
         ravelKf_[sKf.sr_IMcepos_IMjintpos] = \
-        ravelKf_[sKf.sr_IMcepos_IMjDLpos ] = -self.Δxpos  # REJpos、IMJpos列
+        ravelKf_[sKf.sr_IMcepos_IMjDLpos ] = -self.Δxpos  # REJintpos、REJDLpos列；IMJintpos、IMJDLpos列
         if self.lithiumPlating:
             ravelKf_[sKf.sr_REceneg_REjLP] = \
             ravelKf_[sKf.sr_IMceneg_IMjLP] = -self.Δxneg  # REθe行REJLP列、IMθe行IMJLP列
@@ -1396,11 +1396,11 @@ class LPJTFP2D(P2Dbase):
         P2Dbase._update_Kf__REce_REce_and_IMce_IMce(self, Deκ_, Deκ_)
 
     def _update_Kf__REφsneg_REJneg_and_IMφsneg_IMJneg(self, σneg):
-        # 更新Kf__矩阵REφsneg行REJneg列、IMφsneg行IMJneg列
+        # 更新Kf__矩阵REφsneg行REJintneg/REJDLneg列、IMφsneg行IMJintneg/IMJDLneg列
         P2Dbase._update_Kf__REφsneg_REjneg_and_IMφsneg_IMjneg(self, σneg)
 
     def _update_Kf__REφspos_REJpos_and_IMφspos_IMJpos(self, σpos):
-        # 更新Kf__矩阵REφspos行REJpos列、IMφspos行IMJpos列
+        # 更新Kf__矩阵REφspos行REJintpos/REJDLpos列、IMφspos行IMJintpos/IMJDLpos列
         P2Dbase._update_Kf__REφspos_REjpos_and_IMφspos_IMjpos(self, σpos)
 
     def _update_bKf_REφsneg0_and_REφsposEnd(self, σneg, σpos):
@@ -1413,15 +1413,15 @@ class LPJTFP2D(P2Dbase):
         bKf_[sKf.s_REφspos.stop - 1] = self.Δxpos*ΔIAC/σpos
 
     def _update_Kf__REηintneg_REJneg_and_IMηintneg_IMJneg(self, RSEIneg):
-        # 更新Kf__矩阵REηintneg行REJneg列、IMηintneg行IMJneg列
+        # 更新Kf__矩阵REηintneg行REJintneg/REJDLneg列、IMηintneg行IMJintneg/IMJDLneg列
         P2Dbase._update_Kf__REηintneg_REjneg_and_IMηintneg_IMjneg(self, RSEIneg, 1)
 
     def _update_Kf__REηintpos_REJpos_and_IMηintpos_IMJpos(self, RSEIpos):
-        # 更新Kf__矩阵REηintpos行REJpos列、IMηintpos行IMJpos列
+        # 更新Kf__矩阵REηintpos行REJintpos/REJDLpos列、IMηintpos行IMJintpos/IMJDLpos列
         P2Dbase._update_Kf__REηintpos_REjpos_and_IMηintpos_IMjpos(self, RSEIpos, 1)
 
     def _update_Kf__REηLP_REJneg_and_IMηLP_IMJneg(self, RSEIneg):
-        # 更新Kf__矩阵REηLP行REJneg列、IMηLP行IMJneg列
+        # 更新Kf__矩阵REηLP行REJintneg/REJDLneg列、IMηLP行IMJintneg/IMJDLneg列
         P2Dbase._update_Kf__REηLP_REjneg_and_IMηLP_IMjneg(self, RSEIneg, 1)
 
     def EIS(self):
@@ -1489,13 +1489,13 @@ class LPJTFP2D(P2Dbase):
             κDκT_, κDκT_, Deκ_:=self.Deκ_, Deκ_,
             self.θe_, self.θeInterfaces_)
 
-        # 负极局部体积电流实部REJintneg行、虚部IMJintneg行
+        # 负极主反应集总局部体积电流密度实部REJintneg行、虚部IMJintneg行
         if REIMI0intnegUnknown := (self._I0intneg is None):
             ravelKf_[sKf.sr_REjintneg_REi0intneg] = \
             ravelKf_[sKf.sr_IMjintneg_IMi0intneg] = -self.dJintdI0intneg_ # REIMI0intneg列
         ravelKf_[sKf.sr_REjintneg_REηintneg] = \
         ravelKf_[sKf.sr_IMjintneg_IMηintneg] = -self.dJintdηintneg_       # REIMηintneg列
-        # 正极局部体积电流实部REJintpos行、虚部IMJintpos行
+        # 正极主反应集总局部体积电流密度实部REJintpos行、虚部IMJintpos行
         if REIMI0intposUnknown := (self._I0intpos is None):
             ravelKf_[sKf.sr_REjintpos_REi0intpos] = \
             ravelKf_[sKf.sr_IMjintpos_IMi0intpos] = -self.dJintdI0intpos_  # REIMI0intpos列
@@ -1503,30 +1503,30 @@ class LPJTFP2D(P2Dbase):
         ravelKf_[sKf.sr_IMjintpos_IMηintpos] = -self.dJintdηintpos_        # REIMηintpos列
 
         if REIMI0intnegUnknown:
-            # 负极交换电流实部REI0intneg行、虚部IMI0intneg行
+            # 负极主反应集总交换电流实部REI0intneg行、虚部IMI0intneg行
             ravelKf_[sKf.sr_REi0intneg_REcsnegsurf] = \
             ravelKf_[sKf.sr_IMi0intneg_IMcsnegsurf] = -self.dI0intdθsnegsurf_  # REIMθsnegsurf列
             ravelKf_[sKf.sr_REi0intneg_REceneg] = \
             ravelKf_[sKf.sr_IMi0intneg_IMceneg] = -self.dI0intdθeneg_  # REIMθe列
         if REIMI0intposUnknown:
-            # 正极交换电流实部REI0intpos行、虚部IMI0intpos行
+            # 正极主反应集总交换电流实部REI0intpos行、虚部IMI0intpos行
             ravelKf_[sKf.sr_REi0intpos_REcspossurf] = \
-            ravelKf_[sKf.sr_IMi0intpos_IMcspossurf] = -self.dI0intdθspossurf_  # REIMθsnegsurf列
+            ravelKf_[sKf.sr_IMi0intpos_IMcspossurf] = -self.dI0intdθspossurf_  # REIMθspossurf列
             ravelKf_[sKf.sr_REi0intpos_REcepos] = \
             ravelKf_[sKf.sr_IMi0intpos_IMcepos] = -self.dI0intdθepos_  # REIMθe列
 
         # 负极过电位实部REηintneg行REθsnegsurf列、虚部IMηintneg行IMθsnegsurf列
         ravelKf_[sKf.sr_REηintneg_REcsnegsurf] = \
         ravelKf_[sKf.sr_IMηintneg_IMcsnegsurf] = self.dUOCPdθsnegsurf_
-        # 正极过电位实部REηintpos行REθspossurf列、虚部IMηintpos行IMθsnegsurf列
+        # 正极过电位实部REηintpos行REθspossurf列、虚部IMηintpos行IMθspossurf列
         ravelKf_[sKf.sr_REηintpos_REcspossurf] = \
         ravelKf_[sKf.sr_IMηintpos_IMcspossurf] = self.dUOCPdθspossurf_
 
         if lithiumPlating:
-            # 析锂局部体积电流实部REJLP行REθe负极列、虚部IMJLP行IMθe负极列
+            # 析锂反应集总局部体积电流密度实部REJLP行REθe负极列、虚部IMJLP行IMθe负极列
             ravelKf_[sKf.sr_REjLP_REceneg] = \
             ravelKf_[sKf.sr_IMjLP_IMceneg] = -self.dJLPdθe_
-            # 析锂局部体积电流实部REJLP行REηLP列、虚部IMJLP行IMηLP列
+            # 析锂反应集总局部体积电流密度实部REJLP行REηLP列、虚部IMJLP行IMηLP列
             ravelKf_[sKf.sr_REjLP_REηLP] = \
             ravelKf_[sKf.sr_IMjLP_IMηLP] = -self.dJLPdηLP_
 
@@ -1543,38 +1543,38 @@ class LPJTFP2D(P2Dbase):
                 cache['minusKθsnegsurf___'], cache['minusKθspossurf___'])):
             ## 遍历所有频率f ##
 
-            # 负极固相表面浓度实部REθsnegsurf行
+            # 负极固相表面无量纲浓度实部REθsnegsurf行
             ravelKf_REθsnegsurf_REJintneg_[:] = minusKθsnegsurf__[0, 0]  # REJintneg列
             ravelKf_REθsnegsurf_IMJintneg_[:] = minusKθsnegsurf__[0, 1]  # IMJintneg列
-            # 负极固相表面浓度虚部IMθsnegsurf行
+            # 负极固相表面无量纲浓度虚部IMθsnegsurf行
             ravelKf_IMθsnegsurf_REJintneg_[:] = minusKθsnegsurf__[1, 0]  # REJintneg列
             ravelKf_IMθsnegsurf_IMJintneg_[:] = minusKθsnegsurf__[1, 1]  # IMJintneg列
-            # 正极固相表面浓度实部REθspossurf行
+            # 正极固相表面无量纲浓度实部REθspossurf行
             ravelKf_REθspossurf_REJintpos_[:] = minusKθspossurf__[0, 0]  # REJintpos列
             ravelKf_REθspossurf_IMJintpos_[:] = minusKθspossurf__[0, 1]  # IMJintpos列
-            # 正极固相表面浓度虚部IMθspossurf行
+            # 正极固相表面无量纲浓度虚部IMθspossurf行
             ravelKf_IMθspossurf_REJintpos_[:] = minusKθspossurf__[1, 0]  # REJintpos列
             ravelKf_IMθspossurf_IMJintpos_[:] = minusKθspossurf__[1, 1]  # IMJintpos列
 
             ravelKf_REθe_IMθe_[:] = -ωqeΔx_  # REθe行IMθe列
             ravelKf_IMθe_REθe_[:] = ωqeΔx_   # IMθe行REθe列
 
-            # 负极双电层局部体积电流实部REJDLneg行
+            # 负极双电层集总局部体积电流密度实部REJDLneg行
             ravelKf_REJDLneg_IMφsneg_[:] = ωCDLneg   # IMφsneg列
             ravelKf_REJDLneg_IMφeneg_[:] = -ωCDLneg  # IMφe负极列
             ravelKf_REJDLneg_IMJintneg_[:] = \
             ravelKf_REJDLneg_IMJDLneg_[:] = -ωCDLRSEIneg  # IMJintneg列、IMJDLneg列
-            # 负极双电层局部体积电流虚部IMJDLneg行
+            # 负极双电层集总局部体积电流密度虚部IMJDLneg行
             ravelKf_IMJDLneg_REφsneg_[:] = -ωCDLneg  # REφsneg列
             ravelKf_IMJDLneg_REφeneg_[:] = ωCDLneg   # REφe负极列
             ravelKf_IMJDLneg_REJintneg_[:] = \
             ravelKf_IMJDLneg_REJDLneg_[:]  = ωCDLRSEIneg  # REJintneg列、REJDLneg列
-            # 正极双电层局部体积电流实部REJDLpos行
+            # 正极双电层集总局部体积电流密度实部REJDLpos行
             ravelKf_REJDLpos_IMφspos_[:] = ωCDLpos   # IMφspos列
             ravelKf_REJDLpos_IMφepos_[:] = -ωCDLpos  # IMφe正极列
             ravelKf_REJDLpos_IMJintpos_[:] = \
             ravelKf_REJDLpos_IMJDLpos_[:] = -ωCDLRSEIpos  # IMJintpos列、IMJDLpos列
-            # 正极双电层局部体积电流虚部IMJDLpos行
+            # 正极双电层集总局部体积电流密度虚部IMJDLpos行
             ravelKf_IMJDLpos_REφspos_[:] = -ωCDLpos  # REφspos列
             ravelKf_IMJDLpos_REφepos_[:] = ωCDLpos   # REφe正极列
             ravelKf_IMJDLpos_REJintpos_[:] = \
@@ -1612,37 +1612,37 @@ class LPJTFP2D(P2Dbase):
         self.Z_[:] = Zreal_ + 1j*Zimag_ + self.Zl_                    # (Nf,) 全电池复阻抗 [Ω]
 
         if self.complete:
-            self.REθsnegsurf__[:] = X__[:, sKf.s_REcsnegsurf]  # 负极固相表面浓度实部
-            self.IMθsnegsurf__[:] = X__[:, sKf.s_IMcsnegsurf]  # 负极固相表面浓度虚部
-            self.REθspossurf__[:] = X__[:, sKf.s_REcspossurf]  # 正极固相表面浓度实部
-            self.IMθspossurf__[:] = X__[:, sKf.s_IMcspossurf]  # 正极固相表面浓度虚部
-            self.REθe__[:] = X__[:, sKf.s_REce]  # 电解液锂离子浓度实部
-            self.IMθe__[:] = X__[:, sKf.s_IMce]  # 电解液锂离子浓度虚部
+            self.REθsnegsurf__[:] = X__[:, sKf.s_REcsnegsurf]  # 负极固相表面无量纲浓度实部
+            self.IMθsnegsurf__[:] = X__[:, sKf.s_IMcsnegsurf]  # 负极固相表面无量纲浓度虚部
+            self.REθspossurf__[:] = X__[:, sKf.s_REcspossurf]  # 正极固相表面无量纲浓度实部
+            self.IMθspossurf__[:] = X__[:, sKf.s_IMcspossurf]  # 正极固相表面无量纲浓度虚部
+            self.REθe__[:] = X__[:, sKf.s_REce]  # 电解液无量纲锂离子浓度实部
+            self.IMθe__[:] = X__[:, sKf.s_IMce]  # 电解液无量纲锂离子浓度虚部
             self.REφsneg__[:] = REφsneg__  # 负极固相电势实部
             self.IMφsneg__[:] = IMφsneg__  # 负极固相电势虚部
             self.REφspos__[:] = REφspos__  # 正极固相电势实部
             self.IMφspos__[:] = IMφspos__  # 正极固相电势虚部
             self.REφe__[:] = REφe__ = X__[:, sKf.s_REφe]   # 电解液电势实部
             self.IMφe__[:] = IMφe__ = X__[:, sKf.s_IMφe]   # 电解液电势虚部
-            self.REJintneg__[:] = X__[:, sKf.s_REjintneg]  # 负极局部体积电流实部
-            self.IMJintneg__[:] = X__[:, sKf.s_IMjintneg]  # 负极局部体积电流虚部
-            self.REJintpos__[:] = X__[:, sKf.s_REjintpos]  # 正极局部体积电流实部
-            self.IMJintpos__[:] = X__[:, sKf.s_IMjintpos]  # 正极局部体积电流虚部
-            self.REJDLneg__[:] = X__[:, sKf.s_REjDLneg]    # 负极双电层局部体积电流实部
-            self.IMJDLneg__[:] = X__[:, sKf.s_IMjDLneg]    # 负极双电层局部体积电流虚部
-            self.REJDLpos__[:] = X__[:, sKf.s_REjDLpos]    # 正极双电层局部体积电流实部
-            self.IMJDLpos__[:] = X__[:, sKf.s_IMjDLpos]    # 正极双电层局部体积电流虚部
-            self.REI0intneg__[:] = X__[:, sKf.s_REi0intneg] if REIMI0intnegUnknown else 0  # 负极交换电流实部
-            self.IMI0intneg__[:] = X__[:, sKf.s_IMi0intneg] if REIMI0intnegUnknown else 0  # 负极交换电流虚部
-            self.REI0intpos__[:] = X__[:, sKf.s_REi0intpos] if REIMI0intposUnknown else 0  # 正极交换电流实部
-            self.IMI0intpos__[:] = X__[:, sKf.s_IMi0intpos] if REIMI0intposUnknown else 0  # 正极交换电流虚部
+            self.REJintneg__[:] = X__[:, sKf.s_REjintneg]  # 负极主反应集总局部体积电流密度实部
+            self.IMJintneg__[:] = X__[:, sKf.s_IMjintneg]  # 负极主反应集总局部体积电流密度虚部
+            self.REJintpos__[:] = X__[:, sKf.s_REjintpos]  # 正极主反应集总局部体积电流密度实部
+            self.IMJintpos__[:] = X__[:, sKf.s_IMjintpos]  # 正极主反应集总局部体积电流密度虚部
+            self.REJDLneg__[:] = X__[:, sKf.s_REjDLneg]    # 负极双电层集总局部体积电流密度实部
+            self.IMJDLneg__[:] = X__[:, sKf.s_IMjDLneg]    # 负极双电层集总局部体积电流密度虚部
+            self.REJDLpos__[:] = X__[:, sKf.s_REjDLpos]    # 正极双电层集总局部体积电流密度实部
+            self.IMJDLpos__[:] = X__[:, sKf.s_IMjDLpos]    # 正极双电层集总局部体积电流密度虚部
+            self.REI0intneg__[:] = X__[:, sKf.s_REi0intneg] if REIMI0intnegUnknown else 0  # 负极主反应集总交换电流实部
+            self.IMI0intneg__[:] = X__[:, sKf.s_IMi0intneg] if REIMI0intnegUnknown else 0  # 负极主反应集总交换电流虚部
+            self.REI0intpos__[:] = X__[:, sKf.s_REi0intpos] if REIMI0intposUnknown else 0  # 正极主反应集总交换电流实部
+            self.IMI0intpos__[:] = X__[:, sKf.s_IMi0intpos] if REIMI0intposUnknown else 0  # 正极主反应集总交换电流虚部
             self.REηintneg__[:] = X__[:, sKf.s_REηintneg]  # 负极过电位实部
             self.IMηintneg__[:] = X__[:, sKf.s_IMηintneg]  # 负极过电位虚部
             self.REηintpos__[:] = X__[:, sKf.s_REηintpos]  # 正极过电位实部
             self.IMηintpos__[:] = X__[:, sKf.s_IMηintpos]  # 正极过电位虚部
             if lithiumPlating:
-                self.REJLP__[:] = X__[:, sKf.s_REjLP]  # 负极析锂局部体积电流密度实部
-                self.IMJLP__[:] = X__[:, sKf.s_IMjLP]  # 负极析锂局部体积电流密度虚部
+                self.REJLP__[:] = X__[:, sKf.s_REjLP]  # 负极析锂反应集总局部体积电流密度实部
+                self.IMJLP__[:] = X__[:, sKf.s_IMjLP]  # 负极析锂反应集总局部体积电流密度虚部
                 self.REηLP__[:] = X__[:, sKf.s_REηLP]  # 负极析锂过电位实部
                 self.IMηLP__[:] = X__[:, sKf.s_IMηLP]  # 负极析锂过电位虚部
 
@@ -1720,8 +1720,8 @@ class LPJTFP2D(P2Dbase):
             ω_: ndarray,  # (Nf,) 角频率序列 [rad/s]
             Q: float,     # 电极容量 [Ah]
             Ds: float,    # 集总固相锂离子扩散系数 [1/s]
-            REJint__: ndarray,  # (Nf, Nreg) 主反应局部体积电流密度实部 [A]
-            IMJint__: ndarray,  # (Nf, Nreg) 主反应局部体积电流密度虚部 [A]
+            REJint__: ndarray,  # (Nf, Nreg) 集总局部体积电流密度实部 [A]
+            IMJint__: ndarray,  # (Nf, Nreg) 集总局部体积电流密度虚部 [A]
             ):
         """固相浓度实部、虚部在r处的解析解"""
         W2_ = ω_/Ds
@@ -1804,37 +1804,37 @@ class LPJTFP2D(P2Dbase):
         print('='*100)
         print(f'检验频域控制方程：')
         Nneg, Nsep, Npos = self.Nneg, self.Nsep, self.Npos
-        REθsnegsurf__ = self.REθsnegsurf__  # 负极固相表面浓度实部
-        IMθsnegsurf__ = self.IMθsnegsurf__  # 负极固相表面浓度虚部
-        REθspossurf__ = self.REθspossurf__  # 正极固相表面浓度实部
-        IMθspossurf__ = self.IMθspossurf__  # 正极固相表面浓度虚部
-        REθe__ = self.REθe__            # 电解液锂离子浓度实部
-        IMθe__ = self.IMθe__            # 电解液锂离子浓度虚部
+        REθsnegsurf__ = self.REθsnegsurf__  # 负极固相表面无量纲浓度实部
+        IMθsnegsurf__ = self.IMθsnegsurf__  # 负极固相表面无量纲浓度虚部
+        REθspossurf__ = self.REθspossurf__  # 正极固相表面无量纲浓度实部
+        IMθspossurf__ = self.IMθspossurf__  # 正极固相表面无量纲浓度虚部
+        REθe__ = self.REθe__            # 电解液无量纲锂离子浓度实部
+        IMθe__ = self.IMθe__            # 电解液无量纲锂离子浓度虚部
         REφsneg__ = self.REφsneg__      # 负极固相电势实部
         IMφsneg__ = self.IMφsneg__      # 负极固相电势虚部
         REφspos__ = self.REφspos__      # 正极固相电势实部
         IMφspos__ = self.IMφspos__      # 正极固相电势虚部
         REφe__ = self.REφe__            # 电解液电势实部
         IMφe__ = self.IMφe__            # 电解液电势虚部
-        REJintneg__ = self.REJintneg__  # 负极局部体积电流实部
-        IMJintneg__ = self.IMJintneg__  # 负极局部体积电流虚部
-        REJintpos__ = self.REJintpos__  # 正极局部体积电流实部
-        IMJintpos__ = self.IMJintpos__  # 正极局部体积电流虚部
-        REJDLneg__ = self.REJDLneg__    # 负极双电层局部体积电流实部
-        IMJDLneg__ = self.IMJDLneg__    # 负极双电层局部体积电流虚部
-        REJDLpos__ = self.REJDLpos__    # 正极双电层局部体积电流实部
-        IMJDLpos__ = self.IMJDLpos__    # 正极双电层局部体积电流虚部
-        REI0intneg__ = self.REI0intneg__  # 负极交换电流实部
-        IMI0intneg__ = self.IMI0intneg__  # 负极交换电流虚部
-        REI0intpos__ = self.REI0intpos__  # 正极交换电流实部
-        IMI0intpos__ = self.IMI0intpos__  # 正极交换电流虚部
+        REJintneg__ = self.REJintneg__  # 负极主反应集总局部体积电流密度实部
+        IMJintneg__ = self.IMJintneg__  # 负极主反应集总局部体积电流密度虚部
+        REJintpos__ = self.REJintpos__  # 正极主反应集总局部体积电流密度实部
+        IMJintpos__ = self.IMJintpos__  # 正极主反应集总局部体积电流密度虚部
+        REJDLneg__ = self.REJDLneg__    # 负极双电层集总局部体积电流密度实部
+        IMJDLneg__ = self.IMJDLneg__    # 负极双电层集总局部体积电流密度虚部
+        REJDLpos__ = self.REJDLpos__    # 正极双电层集总局部体积电流密度实部
+        IMJDLpos__ = self.IMJDLpos__    # 正极双电层集总局部体积电流密度虚部
+        REI0intneg__ = self.REI0intneg__  # 负极主反应集总交换电流实部
+        IMI0intneg__ = self.IMI0intneg__  # 负极主反应集总交换电流虚部
+        REI0intpos__ = self.REI0intpos__  # 正极主反应集总交换电流实部
+        IMI0intpos__ = self.IMI0intpos__  # 正极主反应集总交换电流虚部
         REηintneg__ = self.REηintneg__  # 负极过电位实部
         IMηintneg__ = self.IMηintneg__  # 负极过电位虚部
         REηintpos__ = self.REηintpos__  # 正极过电位实部
         IMηintpos__ = self.IMηintpos__  # 正极过电位虚部
         if self.lithiumPlating:
-            REJLP__ = self.REJLP__  # 负极析锂局部体积电流密度实部
-            IMJLP__ = self.IMJLP__  # 负极析锂局部体积电流密度虚部
+            REJLP__ = self.REJLP__  # 负极析锂反应集总局部体积电流密度实部
+            IMJLP__ = self.IMJLP__  # 负极析锂反应集总局部体积电流密度虚部
             REηLP__ = self.REηLP__  # 负极析锂过电位实部
             IMηLP__ = self.IMηLP__  # 负极析锂过电位虚部
         else:
@@ -1874,8 +1874,8 @@ class LPJTFP2D(P2Dbase):
             REθeInterfaces__[:, nE] = (Deκ_[nW]*Δx_[nE]*REθe__[:, nW] + Deκ_[nE]*Δx_[nW]*REθe__[:, nE])/(Deκ_[nW]*Δx_[nE] + Deκ_[nE]*Δx_[nW])
         REθeWest__ = REθeInterfaces__[:, :-1]  # 各控制体左界面的电解液锂离子浓度 [–]
         REθeEast__ = REθeInterfaces__[:, 1:]   # 各控制体右界面的电解液锂离子浓度 [–]
-        gradREθeWest__ = hstack([zeros([Nf, 1]), (REθe__[:, 1:] - REθe__[:, :-1])/ΔxWest_[1:]])   # 各控制体左界面的锂离子浓度梯度实部 [–/–]
-        gradREθeEast__ = hstack([(REθe__[:, 1:] - REθe__[:, :-1])/ΔxEast_[:-1], zeros([Nf, 1])])  # 各控制体右界面的锂离子浓度梯度实部 [–/–]
+        gradREθeWest__ = hstack([zeros([Nf, 1]), (REθe__[:, 1:] - REθe__[:, :-1])/ΔxWest_[1:]])   # 各控制体左界面的无量纲锂离子浓度梯度实部 [–/–]
+        gradREθeEast__ = hstack([(REθe__[:, 1:] - REθe__[:, :-1])/ΔxEast_[:-1], zeros([Nf, 1])])  # 各控制体右界面的无量纲锂离子浓度梯度实部 [–/–]
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
             # 修正负极-隔膜界面、隔膜-正极界面
             gradREθeEast__[:, nW] = (REθeEast__[:, nW] - REθe__[:, nW])/(0.5*Δx_[nW])
@@ -1887,8 +1887,8 @@ class LPJTFP2D(P2Dbase):
             IMθeInterfaces__[:, nE] = (Deκ_[nW]*IMθe__[:, nW]*Δx_[nE] + Deκ_[nE]*IMθe__[:, nE]*Δx_[nW])/(Deκ_[nW]*Δx_[nE] + Deκ_[nE]*Δx_[nW])
         IMθeWest__ = IMθeInterfaces__[:, :-1]  # 各控制体左界面的电解液锂离子浓度虚部  [–]
         IMθeEast__ = IMθeInterfaces__[:, 1:]   # 各控制体右界面的电解液锂离子浓度虚部  [–]
-        gradIMθeWest__ = hstack([zeros([Nf, 1]), (IMθe__[:, 1:] - IMθe__[:, :-1])/ΔxWest_[1:]])   # 各控制体左界面的锂离子浓度梯度虚部 [–/–]
-        gradIMθeEast__ = hstack([(IMθe__[:, 1:] - IMθe__[:, :-1])/ΔxEast_[:-1], zeros([Nf, 1])])  # 各控制体右界面的锂离子浓度梯度虚部 [–/–]
+        gradIMθeWest__ = hstack([zeros([Nf, 1]), (IMθe__[:, 1:] - IMθe__[:, :-1])/ΔxWest_[1:]])   # 各控制体左界面的无量纲锂离子浓度梯度虚部 [–/–]
+        gradIMθeEast__ = hstack([(IMθe__[:, 1:] - IMθe__[:, :-1])/ΔxEast_[:-1], zeros([Nf, 1])])  # 各控制体右界面的无量纲锂离子浓度梯度虚部 [–/–]
         for (nW, nE) in ([Nneg - 1, Nneg], [Nneg + Nsep - 1, Nneg + Nsep]):
             # 修正负极-隔膜界面、隔膜-正极界面
             gradIMθeEast__[:, nW] = (IMθeEast__[:, nW] - IMθe__[:, nW])/(0.5*Δx_[nW])
@@ -1932,12 +1932,12 @@ class LPJTFP2D(P2Dbase):
         LHS__ = -outer(ω_, qe_) * IMθe__
         RHS__ = Deκ_*(gradREθeEast__ - gradREθeWest__)/Δx_ + hstack([REJintneg__ + REJDLneg__ + REJLP__, zeros([Nf, Nsep]), REJintpos__ + REJDLpos__])
         maxError = abs(LHS__ - RHS__).max()
-        print(f'电解液实部浓度方程 REθe 最大误差{maxError: 8e} [C]')
+        print(f'电解液实部无量纲浓度方程 REθe 最大误差{maxError: 8e} [A]')
 
         LHS__ = outer(ω_, qe_) * REθe__
         RHS__ = Deκ_*(gradIMθeEast__ - gradIMθeWest__)/Δx_ + hstack([IMJintneg__ + IMJDLneg__ + IMJLP__, zeros([Nf, Nsep]), IMJintpos__ + IMJDLpos__])
         maxError = abs(LHS__ - RHS__).max()
-        print(f'电解液虚部浓度方程 IMθe 最大误差{maxError: 8e} [C]')
+        print(f'电解液虚部无量纲浓度方程 IMθe 最大误差{maxError: 8e} [A]')
 
         gradREφsnegInterfaces_ = hstack([full([Nf, 1], -ΔIAC/σneg), (REφsneg__[:, 1:] - REφsneg__[:, :-1])/Δxneg, zeros([Nf, 1])])
         ΔREφsneg__ = (gradREφsnegInterfaces_[:, 1:] - gradREφsnegInterfaces_[:, :-1])/Δxneg
@@ -1993,7 +1993,7 @@ class LPJTFP2D(P2Dbase):
             abs(IMI0intneg__ - (dI0intdθeneg_*IMθe__[:, :Nneg] + dI0intdθsnegsurf_*IMθsnegsurf__)).max(),
             abs(REI0intpos__ - (dI0intdθepos_*REθe__[:, -Npos:] + dI0intdθspossurf_*REθspossurf__)).max(),
             abs(IMI0intpos__ - (dI0intdθepos_*IMθe__[:, -Npos:] + dI0intdθspossurf_*IMθspossurf__)).max(), ])
-        print(f'交换电流密度方程 REI0int IMI0int 最大误差{maxError: 8e} [A]')
+        print(f'集总交换电流方程 REI0int IMI0int 最大误差{maxError: 8e} [A]')
 
         dUOCPdθsnegsurf_, dUOCPdθspossurf_ = self.dUOCPdθsnegsurf_, self.dUOCPdθspossurf_
         maxError = max([
@@ -2016,10 +2016,10 @@ class LPJTFP2D(P2Dbase):
             print(f'析锂过电位方程 REηLP IMηLP 最大误差{maxError: 8e} [V]')
 
     plot_θ = P2Dbase.plot_c              # 作图：浓度场-空间、时间
-    plot_Jint_I0int_ηint = P2Dbase.plot_jint_i0int_ηint  # 作图：主反应局部体积电流密度、过电位、交换电流密度-空间、时间
-    plot_JDL = P2Dbase.plot_jDL          # 作图：双电层效应局部体积电流密度、电流
+    plot_Jint_I0int_ηint = P2Dbase.plot_jint_i0int_ηint  # 作图：主反应集总局部体积电流密度、集总交换电流、过电位-空间、时间
+    plot_JDL = P2Dbase.plot_jDL          # 作图：双电层效应集总局部体积电流密度、电流
     plot_θsr = P2Dbase.plot_csr          # 作图：固相颗粒径向锂离子浓度场-空间、时间
-    plot_JLP_ηLP = P2Dbase.plot_jLP_ηLP  # 作图：负极析锂局部体积电流密度-空间、时间
+    plot_JLP_ηLP = P2Dbase.plot_jLP_ηLP  # 作图：负极析锂反应集总局部体积电流密度-空间、时间
     plot_REθssurf_IMEθssurf = P2Dbase.plot_REcssurf_IMcssurf
     plot_REθe_IMθe = P2Dbase.plot_REce_IMce
     plot_REJint_IMJint = P2Dbase.plot_REjint_IMjint
@@ -2032,7 +2032,7 @@ if __name__=='__main__':
         SOC0=0.1,
         # I0intneg=18, I0intpos=22,
         Nneg=8, Nsep=7, Npos=6, Nr=5,
-        f_=np.logspace(3, -1, 16),
+        f_=np.logspace(3, -1, 21),
         lithiumPlating=True,
         # doubleLayerEffect=False,
         # complete=False,
@@ -2041,9 +2041,8 @@ if __name__=='__main__':
         )
 
     cell.count_lithium()
-    cell.EIS()
-    thermalModel = 1
-    cell.CC(-15, 2000, thermalModel=thermalModel).EIS()
+    thermalModel = 0
+    cell.CC(-15, 2000, thermalModel=thermalModel, tEIS_=[0, 1000, 2000])
     cell.CC(20, 1000, thermalModel=thermalModel).EIS()
     cell.CC(0, 300, thermalModel=thermalModel).EIS()
     cell.checkEIS()

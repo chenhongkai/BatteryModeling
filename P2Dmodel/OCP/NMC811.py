@@ -17,7 +17,7 @@ class NMC811(OCPbase):
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC811_129_Chen2020')
         self.NMC811_129_Chen2020 = interp1d(table['θs'], table['UOCP'])
 
-        # C/30 qOCV charge, 3 electrode full python data
+        # C/30 qOCV charge, 3-electrode full cell data
         # https://doi.org/10.1016%2Fj.jpowsour.2018.11.043
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC811_626_Sturm2019')
         self.NMC811_626_Sturm2019 = interp1d(table['θs'], table['UOCP'])
@@ -27,6 +27,5 @@ class NMC811(OCPbase):
 if __name__=='__main__':
     pos = NMC811()
     pos.plot()
-
 
 

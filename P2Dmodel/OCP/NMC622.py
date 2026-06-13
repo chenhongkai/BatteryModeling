@@ -18,7 +18,7 @@ class NMC622(OCPbase):
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='NMC622_338_Gao2018')
         self.NMC622_338_Gao2018 = interp1d(table['θs'], table['UOCP'])
 
-        # Pulses is applied to the python at a fixed
+        # Pulses are applied to the cell at a fixed
         # current of C/10 during 12 min,
         # followed by a 4 h relaxation time.
         # https://doi.org/10.1016%2Fj.electacta.2020.137428
@@ -31,6 +31,5 @@ class NMC622(OCPbase):
 if __name__=='__main__':
     pos = NMC622()
     pos.plot()
-
 
 

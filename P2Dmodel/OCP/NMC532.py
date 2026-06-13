@@ -17,7 +17,7 @@ class NMC532(OCPbase):
 
     @staticmethod
     def NMC532_569_Verma2017(θs_: np.ndarray) -> np.ndarray:
-        # Delitiation OCV Function from paper.
+        # Delithiation OCV Function from paper.
         # https://doi.org/10.1149%2F2.1701713jes
         UOCP_ = 4851.489856*θs_**9 - 30525.40243*θs_**8 + 83781.31058*θs_**7 - 131496.4647*θs_**6 + 129923.6915*θs_**5 \
                - 83737.64466*θs_**4 + 35194.22436*θs_**3 - 9301.7411*θs_**2 \
@@ -36,6 +36,5 @@ class NMC532(OCPbase):
 if __name__=='__main__':
     pos = NMC532()
     pos.plot(np.arange(0.0, 1 + 1e-6, 0.001))
-
 
 

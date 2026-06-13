@@ -15,7 +15,7 @@ class Graphite(OCPbase):
         self.Graphite_COMSOL = interp1d(table['θs'], table['UOCP'])
 
         # Data points extracted with WebPlotDigitizer,
-        # functional form fit with optimization process as discussed in maintext.
+        # functional form fit with optimization process as discussed in main text.
         # To measure the OCV, the coin cells were discharged to a minimum voltage using a CC-CV discharge, followed by a stepwise charge process.
         # In each step, the OCV was identified after a break of 5 h. The measurement was performed at 23◦C.
         # https://doi.org/10.1149%2F2.0551509jes
@@ -66,7 +66,7 @@ class Graphite(OCPbase):
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_673_Birkl2015')
         self.Graphite_673_Birkl2015 = interp1d(table['θs'], table['UOCP'])
 
-        # Half-python quasi-OCV on charge
+        # Half-cell quasi-OCV on charge
         # https://doi.org/10.1016%2Fj.electacta.2012.04.050
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_708_Li2012')
         self.Graphite_708_Li2012 = interp1d(table['θs'], table['UOCP'])
@@ -91,7 +91,7 @@ class Graphite(OCPbase):
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_967_Kumaresan2008')
         self.Graphite_967_Kumaresan2008 = interp1d(table['θs'], table['UOCP'])
 
-        # Pulses is applied to the python at a fixed current of C/10 during 12 min,
+        # Pulses are applied to the cell at a fixed current of C/10 during 12 min,
         # followed by a 4 h relaxation time.
         # https://doi.org/10.1016%2Fj.electacta.2020.137428
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_969_Chaouachi2021')
@@ -234,4 +234,3 @@ class Graphite(OCPbase):
 if __name__=='__main__':
     neg = Graphite()
     neg.plot(np.arange(0.01, 1 + 1e-6, 0.001))
-

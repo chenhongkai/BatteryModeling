@@ -2,8 +2,10 @@
 from .DFNJTFP2D import DFNJTFP2D
 from .LPJTFP2D import LPJTFP2D
 from .ELPJTFP2D import ELPJTFP2D
-from .tools import (LumpedParameters, EnhancedLumpedParameters, ConservativeLumpedParameters,
-                    set_matplotlib, diagonalSliceRavel, get_color)
+from .tools import (LumpedParameters,
+                    EnhancedLumpedParameters,
+                    ConservativeLumpedParameters,
+                    set_matplotlib, diagonalSliceRavel, get_color, Interpolate1D)
 
 try:
     import mph

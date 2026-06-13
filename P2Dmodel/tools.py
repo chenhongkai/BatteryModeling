@@ -11,18 +11,21 @@ import matplotlib.pyplot as plt
 
 F = 96485.33289  # 法拉第Faraday常数 [C/mol]
 R = 8.314472     # 理想气体常数 [J/(mol·K)]
-M = 6.941e-3     # 锂的摩尔质量 [kg/mol]
+M = 6.941e-3     # 锂摩尔质量 [kg/mol]
 ρ = 534.         # 锂金属密度 [kg/m^3]
 
 
 class LumpedParameters:
     """23集总参数取值"""
-    __slots__ = ('bounds__',)
+    __slots__ = (
+        'Qnom',
+        'bounds__',)
 
     def __init__(self,
-            Qnom: float | int = 1, # 电池标称容量 [Ah]
+            Qnom: float | int = 1,            # 电池标称容量 [Ah]
+            activation_energy: bool = False,  # 是否包含参数活化能
             ):
-        assert Qnom>0, '电池标称容量应大于0 [Ah]'
+        self.Qnom = Qnom; assert Qnom>0, f'电池标称容量{Qnom = }，应大于0 [Ah]，'
         Qnom_in_C = Qnom*3600  # 电池标称容量 [C]
         self.bounds__ = {
             'SOC0': (0.01, 0.8),
@@ -48,6 +51,17 @@ class LumpedParameters:
             'CDLneg': array([1e-6, 1e-2])*Qnom_in_C,
             'CDLpos': array([1e-6, 1e-2])*Qnom_in_C,
             'l': array([1e-13, 1e-11])*Qnom_in_C, }
+        if activation_energy:
+            self.bounds__.update({
+                # Global sensitivity analysis towards non-invasive parameterization of the electrochemical-thermal model for lithium-ion batteries
+                # https://doi.org/10.1016/j.adapen.2025.100221
+                'Ekneg': array([5, 80])*1e3,
+                'Ekpos': array([5, 80])*1e3,
+                'EDsneg': array([5, 85])*1e3,
+                'EDspos': array([5, 85])*1e3,
+                'EDe': array([10, 20])*1e3,
+                'Eκ': array([4, 30])*1e3,
+                })
 
         for name, bound_ in self.bounds__.items():
             self.bounds__[name] = (float(bound_[0]), float(bound_[1]))
@@ -68,7 +82,8 @@ class LumpedParameters:
     @property
     def nominalSet_(self) -> dict:
         # 标称参数集
-        return {name: self.denormalize(name, 0.5) for name in self.bounds__}
+        denormalize = self.denormalize
+        return {name: denormalize(name, 0.5) for name in self.bounds__}
 
     def normalize(self,
                   name: str,
@@ -147,8 +162,7 @@ class LumpedParameters:
         match name:
             case 'Qcell' | 'Qneg' | 'Qpos':
                 unit = '$Ah$'
-            case 'θminneg' | 'θmaxneg' | 'θminpos' | 'θmaxpos' |\
-                 'SOC0' |\
+            case 'θminneg' | 'θmaxneg' | 'θminpos' | 'θmaxpos' | 'SOC0' |\
                  'Kqeneg' | 'Kqepos' | 'Kκneg' | 'Kκpos':
                 unit = ''
             case 'σneg' | 'σpos' | 'κneg' | 'κsep' | 'κpos':
@@ -204,30 +218,28 @@ class EnhancedLumpedParameters(LumpedParameters):
     """强集总参数取值"""
     __slots__ = ()
 
-    def __init__(self,
-                 Qnom: float | int = 18.,  # 电池标称容量 [Ah]
-                 ):
-        LumpedParameters.__init__(self, Qnom=Qnom,)
+    def __init__(self, **kwargs):
+        LumpedParameters.__init__(self, **kwargs)
         del self.bounds__['κneg'], self.bounds__['κpos'],\
             self.bounds__['qeneg'], self.bounds__['qepos']
-        self.bounds__ |= {
+        self.bounds__.update({
             'Kκneg': (0.08, 1),
             'Kκpos': (0.08, 1),
             'Kqeneg': (0.5, 4),
-            'Kqepos': (0.5, 4),}
+            'Kqepos': (0.5, 4),})
 
 class ConservativeLumpedParameters(LumpedParameters):
     """保守集总参数取值（25参数，含4边界嵌锂状态，不含正负极容量Qneg、Qpos）"""
     __slots__ = ()
 
-    def __init__(self, Qnom):
-        LumpedParameters.__init__(self, Qnom=Qnom)
+    def __init__(self, **kwargs):
+        LumpedParameters.__init__(self, **kwargs)
         del self.bounds__['Qneg'], self.bounds__['Qpos']
-        self.bounds__ |= {
+        self.bounds__.update({
             'θminneg': (0.001, 0.44),   # SOC=0%的负极嵌锂状态取值范围
             'θmaxneg': (0.60, 0.99),    # SOC=100%的负极嵌锂状态取值范围
             'θminpos': (0.001, 0.44),   # SOC=100%的正极嵌锂状态取值范围
-            'θmaxpos': (0.60, 0.99),}   # SOC=0%的正极嵌锂状态取值范围
+            'θmaxpos': (0.60, 0.99),})  # SOC=0%的正极嵌锂状态取值范围
 
 
 def set_matplotlib(fontsize: int | float = 12):
@@ -281,9 +293,9 @@ def transform37to23(
         'kneg' : F*aneg*A*Lneg*kneg*ce0**0.5*csmaxneg,  # 负极集总反应速率常数 [A]
         'kpos' : F*apos*A*Lpos*kpos*ce0**0.5*csmaxpos,  # 正极集总反应速率常数 [A]
         'RSEIneg' : RSEIneg/(aneg*A*Lneg),  # 负极集总SEI膜内阻 [Ω]
-        'RSEIpos' : RSEIpos/(apos*A*Lpos),  # 负极集总SEI膜内阻 [Ω]
-        'κD' : 2*R/F*(1 - tplus)*TDF,   # 液相离子电导系数 [–]
-        'De' : F*De*ce0/κ/(1 - tplus),    # 液相集总扩散系数 [V]
+        'RSEIpos' : RSEIpos/(apos*A*Lpos),  # 正极集总SEI膜内阻 [Ω]
+        'κD' : 2*R/F*(1 - tplus)*TDF,   # 液相离子电导系数 [V/K]
+        'De' : F*De*ce0/κ/(1 - tplus),    # 液相集总扩散系数 [A/S]
         'CDLneg' : aneg*A*Lneg*CDLneg,  # 负极集总双电层电容 [F]
         'CDLpos' : apos*A*Lpos*CDLpos,  # 正极集总双电层电容 [F]
         'l' : l,
@@ -370,5 +382,26 @@ def get_color(s_: Sequence | int, n: int, cmap='viridis'):
     return color_
 
 
+def stepping_aware_cached_property(function):
+    """装饰器：将@property方法变成缓存感知的@property。
+    当前时刻self.t与记录的时刻t不一致时，重算；
+    否则，直接返回 self._cached_values['属性名']。"""
+    name = function.__name__  # @property属性名
+
+    @property
+    def prop(self):
+        t = self.t  # 当前时刻
+        _cached_t = self._cached_t  # 缓存时刻字典
+        if (name in _cached_t) and _cached_t[name] == t:
+            # 时刻匹配 → 直接返回缓存值
+            return self._cached_properties[name]
+        else:
+            # 时刻不匹配 → 需重算
+            self._cached_properties[name] = value = function(self)
+            _cached_t[name] = t
+            return value
+
+    return prop
+
 if __name__ == '__main__':
-    pass
+    lp = LumpedParameters(activation_energy=True)
