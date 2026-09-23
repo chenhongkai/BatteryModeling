@@ -189,4 +189,4 @@ cell.plot_Z()        # 阻抗随频率变化
 
 电子邮箱：[gdchenhongkai@outlook.com](mailto:gdchenhongkai@outlook.com)
 
-如有模型使用、复现或开发问题，欢迎通过 GitHub Issues 或电子邮件交流。用户文档仍在持续完善中。
+如有模型使用、复现或开发问题，欢迎通过邮件交流。用户文档仍在持续完善中。
