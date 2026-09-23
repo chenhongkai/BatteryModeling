@@ -39,7 +39,7 @@
 ## 模型与目录结构
 
 ```text
-Battery/
+BatteryModeling/
 ├─ P2Dmodel/
 │  ├─ P2Dbase.py       # 公共基类：CC、EIS、数据记录、绘图和数值求解工具
 │  ├─ LPJTFP2D.py      # 集总参数时频联合 P2D 模型
@@ -48,7 +48,11 @@ Battery/
 │  ├─ tools.py         # 参数集合、插值、矩阵和绘图辅助工具
 │  ├─ OCP/             # 石墨、LFP、NMC、NCA、LMO 等材料的 OCP 数据和函数
 │  └─ __init__.py      # P2Dmodel 的公开导出接口
-└─ ParameterIdentification/  # SEIS/DEIS 参数辨识
+├─ ParameterIdentification/       # DEIS 参数辨识
+├─ optimization/                  # 参数辨识使用的优化算法
+├─ exampleP2Dmodel.py             # P2Dmodel 最小运行示例
+├─ exampleParameterIdentification.py  # 参数辨识示例
+└─ chargingData.npz               # 参数辨识示例数据
 ```
 
 主要模型的适用场景如下：
@@ -85,7 +89,7 @@ pip install numpy scipy numba pandas matplotlib openpyxl
 - `PyQt5`：使用 Matplotlib 的 Qt 图形窗口时需要；
 - `joblib`：参数辨识脚本中的并行计算会使用。
 
-仓库目前没有统一的依赖锁定文件。建议从 `Battery` 根目录运行脚本，以保证 `P2Dmodel` 可以被正常导入。首次运行涉及 Numba 的函数时会进行编译，因此通常比后续运行慢。
+仓库目前没有统一的依赖锁定文件。建议从 `BatteryModeling` 根目录运行脚本，以保证 `P2Dmodel` 可以被正常导入。首次运行涉及 Numba 的函数时会进行编译，因此通常比后续运行慢。
 
 ## 最小运行示例
 
@@ -176,8 +180,13 @@ cell.plot_Z()        # 阻抗随频率变化
 - 这是研究型代码库，不是已经发布到 PyPI 的独立软件包；部分脚本依赖本机数据文件和工作目录。
 - 修改模型控制方程时，应同时核对时域 Newton 方程、频域 EIS 方程和 `checkEIS()` 检验结果。
 
+## 相关论文
+
+- [Joint time-frequency physicochemical modeling and parameter sensitivity analysis on dynamic electrochemical impedance spectroscopy of lithium-ion batteries](https://doi.org/10.1016/j.jpowsour.2024.235762), *Journal of Power Sources*, 2025.
+- [Electrochemical model parameter identification for lithium-ion batteries via simultaneous charging-voltage and dynamic-impedance measurements](https://doi.org/10.1016/j.electacta.2026.149016), *Electrochimica Acta*, 2026.
+
 ## 联系方式
 
-电子邮箱：[gdchenhongkai@outlook.com]
+电子邮箱：[gdchenhongkai@outlook.com](mailto:gdchenhongkai@outlook.com)
 
-如需交流模型使用、复现或开发问题，请保持礼貌沟通。用户文档仍在持续完善中。
+如有模型使用、复现或开发问题，欢迎通过 GitHub Issues 或电子邮件交流。用户文档仍在持续完善中。

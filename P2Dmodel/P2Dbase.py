@@ -1,6 +1,5 @@
 #%%
-import time, pathlib, os
-os.environ['NUMBA_CACHE_DIR'] = r'C:\numba_cache'
+import time, pathlib
 from math import exp
 from typing import Sequence, Callable
 from functools import partial

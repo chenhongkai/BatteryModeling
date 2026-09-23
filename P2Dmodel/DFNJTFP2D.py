@@ -1,6 +1,5 @@
 ﻿#%%
-import warnings, os
-os.environ['NUMBA_CACHE_DIR'] = r'C:\numba_cache'
+import warnings
 from typing import Sequence
 from functools import partial
 

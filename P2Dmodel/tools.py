@@ -1,6 +1,5 @@
 #%%
 import os
-os.environ['NUMBA_CACHE_DIR'] = r'C:\numba_cache'
 from math import log10
 from typing import Sequence
 from collections.abc import Iterable

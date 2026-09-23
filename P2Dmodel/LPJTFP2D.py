@@ -1,6 +1,4 @@
 #%%
-import os
-os.environ['NUMBA_CACHE_DIR'] = r'C:\numba_cache'
 from functools import partial
 from typing import Callable
 

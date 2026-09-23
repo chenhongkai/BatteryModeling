@@ -1,6 +1,4 @@
 #%%
-import os
-os.environ['NUMBA_CACHE_DIR'] = r'C:\numba_cache'
 from .DFNJTFP2D import DFNJTFP2D
 from .LPJTFP2D import LPJTFP2D
 from .ELPJTFP2D import ELPJTFP2D
