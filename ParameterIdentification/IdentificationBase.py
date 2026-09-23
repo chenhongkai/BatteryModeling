@@ -4,79 +4,88 @@ from typing import Sequence, Callable
 from functools import partial
 from math import sqrt
 
+from numba import njit
 import numpy as np
+from numpy import ndarray, array, concatenate, interp, logspace
+from numpy import abs as np_abs
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
-from numpy import concatenate, interp, diff
 
 np.seterr(divide='ignore', over='ignore', invalid='ignore')
 
-from P2Dmodel import LPJTFP2D, LumpedParameters, set_matplotlib
+from P2Dmodel import LPJTFP2D, LumpedParameters, set_matplotlib, Interpolate1D
 set_matplotlib()
 
 with np.load(pathlib.Path(__file__).parent.joinpath('example_UOCPneg_and_UOCPpos.npz'),
              allow_pickle=True) as npz:
-    UOCPneg, UOCPpos = npz['UOCPneg'].item(), npz['UOCPpos'].item()
+    UOCPneg = Interpolate1D(npz['θsneg_'], npz['UOCPneg_'])
+    UOCPpos = Interpolate1D(npz['θspos_'], npz['UOCPpos_'])
+
+
 
 
 class IdentificationBase(LumpedParameters):
     __slots__ = (
-        'activation_energy',
-        'tC', 'f_', 'T', 'N',
-        'n_jobs', 'batch_size',
-        'algorithm', 'objective',
         'verbose',
-        'pVC_',
-        'record',
+        'thermalModel',
+        'targets_', 'weighting', 'w_',
+        'objective',
         'kwargs',
         'experiences_',
-        )
+        'record',
+        'pVC_',)
 
     def __init__(self,
-            Qnom: float | int = 20,  # 标称容量 [Ah]
-            activation_energy: bool = False,  # 是否认为活化能也是参数
-            tC: float | int = 25,    # 温度 [°C]
-            Nreg = 10,  # 负极、隔膜、正极区域网格数
-            Nr = 10,    # 颗粒网格数
-            UOCPneg: Callable = UOCPneg,  # 负极开路电位函数 [V]
-            UOCPpos: Callable = UOCPpos,  # 正极开路电位函数 [V]
-            Umax: float = 4.2,  # 最大运行电压 [V]
-            Umin: float = 2.8,  # 最小运行电压 [V]
-            f_: Sequence[float] = np.logspace(np.log10(400), np.log10(4), 17),  # 频率序列 [Hz]
-            T: int = 1000,           # 迭代次数
-            N: int = 500,            # 种群规模
-            n_jobs: int = -1,        # joblib并行执行CPU核数
-            batch_size: int = 1,     # joblib并行执行batch_size
-            algorithm: str = 'STA',  # 优化算法
-            objective: str = 'RMSE', # 最小化目标
-            verbose = True,          # 是否提示
-            ):
-        LumpedParameters.__init__(self, Qnom, activation_energy)
-        self.activation_energy = activation_energy
-        self.tC = tC; assert tC>=0, f'温度{tC = }，应大于或等于0 [K]'
-        self.f_ = f_ = np.array(f_)
-        self.T = T
-        self.N = N
-        self.n_jobs = n_jobs
-        self.batch_size = batch_size
-        self.algorithm = algorithm
-        self.objective = objective
+                 verbose: bool = True,    # 是否提示
+                 Qnom: float | int = 20,  # 标称容量 [Ah]
+                 thermalModel: bool = False,    # 是否开启热模型
+                 targets_: tuple[str] = ('UDC', 'Zreal', 'Zimag'),  # 拟合目标 'UDC', 'Zreal', 'Zimag', 'Z'
+                 weighting: str = 'balanced',   # 加权策略 'balanced'：大规模采样估计权重；'adaptive'：自适应权重：'given'：强制给定权重
+                 w_: ndarray | None = None,     # 权重
+                 objective: str = 'RMSE',       # 目标类型 'RMSE'/'MAE'/'MSE'
+                 f_: ndarray = logspace(3, 0, 16),  # 频率序列 [Hz]
+                 tC: float | int = 25,  # 给定温度 [°C]
+                 Nreg = 10,  # 负极、隔膜、正极区域网格数
+                 Nr = 10,    # 颗粒网格数
+                 UOCPneg: Callable = UOCPneg,  # 负极开路电位函数 [V]
+                 UOCPpos: Callable = UOCPpos,  # 正极开路电位函数 [V]
+                 Umax: float = 4.2,  # 最大运行电压 [V]
+                 Umin: float = 2.8,  # 最小运行电压 [V]
+                 ):
+        LumpedParameters.__init__(self, Qnom, thermalModel)
         self.verbose = verbose
-        self.pVC_ = None     # 虚拟电池实际值参数集
-        self.record = None   # 辨识记录
+        self.thermalModel = thermalModel
+        self.targets_ = targets_
+        assert len(targets_)>=1 and all(target in ('UDC', 'Zreal', 'Zimag', 'Z') for target in targets_), f'存在非法拟合目标，{targets_ = }'
+        if len(targets_)==1:
+            self.weighting = 'given'
+            self.w_ = array([1.])
+            if verbose:
+                print('拟合目标仅1个，强制给定权重1')
+        else:
+            self.weighting = weighting
+            assert weighting in ('balanced', 'adaptive', 'given'), f'{weighting = }，非法'
+            if weighting in ('balanced', 'adaptive'):
+                self.w_ = None
+            elif weighting in ('given',):
+                assert isinstance(w_, (ndarray, tuple, list))
+                self.w_ = w_ = array(w_); assert w_.size==len(targets_), f'{w_ = }，权重数目应等于拟合目标数目'
+        self.objective = objective; assert objective in ('RMSE', 'MAE', 'MSE'), f'未定义{objective = }'
+
+        assert tC>=0, f'给定温度{tC = }，应大于或等于0 [K]'
         self.kwargs = kwargs = {
+            'f_': f_,
             'T0': tC + 273.15, 'Tref': tC + 273.15,
             'Nneg': Nreg, 'Nsep': Nreg, 'Npos': Nreg, 'Nr': Nr,
-            'doubleLayerEffect': True, 'lithiumPlating': False,
-            'complete': False, 'verbose': False, 'constants': True,
-            'f_': f_,
             'UOCPneg': UOCPneg, 'UOCPpos': UOCPpos,
             'Umax': Umax, 'Umin': Umin,
             'dUOCPdθsneg': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPneg),
-            'dUOCPdθspos': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPpos),}
-        if activation_energy:
+            'dUOCPdθspos': LPJTFP2D.generate_solve_dUOCPdθs_(UOCPpos),
+            'complete': False, 'verbose': False,
+            }
+        if thermalModel:
             del kwargs['T0']
             kwargs['Tref'] = 298.15
-            kwargs['constants'] = False
 
         self.experiences_ = {
             key: None for key in [
@@ -84,15 +93,32 @@ class IdentificationBase(LumpedParameters):
                 'banded_experience_of_Kf__',
                 'ravelKf_', 'bKf_',
                 'ravelK_', 'bK_',
-                'sK', 'sKf']}
+                'sK', 'sKf']}  # P2D计算经验
+        self.pVC_: dict = None     # 虚拟电池实际值参数集
+        self.record: dict = None   # 辨识记录
 
         if verbose:
-            print(f'频段{f_.min():g}-{f_.max():g}Hz，共{f_.size}频点\n'
-                  f'电池温度{tC = } °C\n'
-                  f'迭代次数{T = }，个体数{N = }\n'
-                  f'joblib利用核数 {n_jobs = }，{batch_size = }\n'
-                  f'优化算法 {algorithm = }，目标类型 {objective = }'
-                  )
+            print(self)
+
+    def __str__(self):
+        names_ = self.names_
+        targets_ = self.targets_
+        weighting = self.weighting
+        w_ = self.w_
+        objective = self.objective
+        f_ = self.kwargs['f_']
+        string = f'{names_.size}参数：{names_}\n'
+        if self.thermalModel:
+            string += '考虑6个活化能、热阻Rth、热容Cth，作为参数\n'
+        string += (
+            f'拟合目标 {targets_ = }\n'
+            f'加权策略 {weighting = }\n'
+            f'权重 {w_ = }\n'
+            f'目标类型 {objective = }\n'
+            f'频段 {f_.min():g}-{f_.max():g} Hz，共{f_.size}频点\n')
+        if not self.thermalModel:
+            string += f'给定电池温度tC = {self.kwargs['T0'] - 273.15} °C\n'
+        return string
 
     def create_experiences_(self) -> None:
         """创造经验"""
@@ -175,8 +201,26 @@ class IdentificationBase(LumpedParameters):
         MAE = MAE_segment_.sum()/(tb - ta)
         return MAE
 
+    @staticmethod
+    def solve_objective(ΔY__: ndarray, objective: str) -> float:
+        # 求解目标
+        if objective=='RMSE':
+            value = sqrt((ΔY__*ΔY__).mean())
+        elif objective=='MAE':
+            value = np_abs(ΔY__).mean()
+        elif objective=='MSE':
+            value = (ΔY__*ΔY__).mean()
+        return value
+
+    @property
+    def f_(self):
+        return self.kwargs['f_']
+
 
 if __name__ == '__main__':
-    task = IdentificationBase()
+    task = IdentificationBase(
+        targets_=('UDC', 'Z'),
+        weighting='adaptive'
+    )
     task.create_experiences_()
-
+    task.experiences_

@@ -34,10 +34,10 @@ class OCPbase(ABC):
         return self.__class__.__name__ + '_COMSOL'
 
     def UOCP(self,
-             θs_: Sequence[float],      # 嵌锂状态序列
+             θs_: Sequence[float],      # 嵌锂状态序列 [–]
              source: str | None= None,  # 数据源
              ) -> np.ndarray:
-        """输入电极嵌锂状态θ_，输出开路电位"""
+        """输入电极嵌锂状态θs_，输出开路电位 [V]"""
         if source is None:
             source = self.defaultSource
         UOCP_ = getattr(self, source)(θs_)  # 开路电位序列
@@ -47,7 +47,7 @@ class OCPbase(ABC):
              θs_: Sequence[float] = np.arange(0, 1 + 1e-6, 0.001),
              sources_: Sequence[str] | None = None,
              ):
-        """可视化实验数据：不同数据源的UOCP-θs曲线"""
+        """可视化不同数据源的UOCP-θs曲线"""
         if sources_ is None:
             sources_ = self.sources_
 

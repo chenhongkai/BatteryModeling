@@ -22,7 +22,7 @@ duration = 1000        # Charging duration [s]
 Δt = 10                # Time step
 f_ = np.logspace(np.log10(400), np.log10(4), 17)  # EIS frequencies [Hz]
 targets_ = ('UDC', 'Zreal', 'Zimag')
-pnormfixed_ = {}        # Normalized values of parameters that are fixed
+pfixed_ = {}           # Values of parameters that are fixed
 
 task = IdentificationDEIS(
     Qnom=Qnom,
@@ -32,10 +32,9 @@ task = IdentificationDEIS(
     onset=onset, duration=duration,
     Δt=Δt, ΔtUDC=ΔtUDC, ΔtEIS=ΔtEIS,
     f_=f_,
-    T=T, N=N,
-    n_jobs=n_jobs, batch_size=batch_size,
-    verbose=True,
-    algorithm=algorithm, objective=objective,)
+    targets_=targets_,
+    objective=objective, verbose=True,
+    )
 
 
 chargingData = np.load('chargingData.npz',
@@ -50,7 +49,9 @@ task.receive_measured_data(
     )
 
 record = task.identify(
-    pnormfixed_,
-    targets_=targets_,
+    pfixed_,
+    T=T, N=N,
+    algorithm=algorithm,
+    n_jobs=n_jobs, batch_size=batch_size,
     Nsample=Nsample,
     )

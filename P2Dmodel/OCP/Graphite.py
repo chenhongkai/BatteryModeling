@@ -76,7 +76,7 @@ class Graphite(OCPbase):
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_717_Hust2019')
         self.Graphite_717_Hust2019 = interp1d(table['θs'], table['UOCP'])
 
-            # Dufour2019 thesis fig 2.8, lithiation at C/10 rate
+        # Dufour2019 thesis fig 2.8, lithiation at C/10 rate
         # https://doi.org/10.1016%2Fj.electacta.2018.03.196
         table = pd.read_excel(OCPbase.path_OCP_from_LiionDB, sheet_name='Graphite_851_Dufour2018')
         self.Graphite_851_Dufour2018 = interp1d(table['θs'], table['UOCP'])

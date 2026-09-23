@@ -3,7 +3,7 @@ from P2Dmodel.LPJTFP2D import LPJTFP2D
 
 
 class ELPJTFP2D(LPJTFP2D):
-    """锂离子电池强化集总参数时频联合准二维模型 Enhanced Lumped-Parameter Joint Time-Frequency Pseudo-two-Dimension model"""
+    """锂离子电池增强集总参数时频联合准二维模型 Enhanced Lumped-Parameter Joint Time-Frequency Pseudo-two-Dimensional model"""
 
     __slots__ = ('Kκneg', 'Kκpos', 'Kqeneg', 'Kqepos')
 
@@ -51,13 +51,11 @@ if __name__=='__main__':
     cell.plot_Jint_I0int_ηint(np.arange(0, 2001, 200))
     cell.plot_JDL(np.arange(0, 2001, 200))
     cell.plot_θsr(np.arange(0, 2001, 200), 1)
-    cell.plot_JLP_ηLP(np.arange(1000, 1601, 100))
-    cell.plot_LP()
     cell.plot_OCV_OCP()
 
     cell.plot_Z()
     cell.plot_Nyquist()
-    cell.plot_REθssurf_IMEθssurf()
+    cell.plot_REθssurf_IMθssurf()
     cell.plot_REθe_IMθe()
     cell.plot_REφs_IMφs()
     cell.plot_REφe_IMφe()
